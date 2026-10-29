@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import { webSearch } from '@/api/search'
 import ChatMessage from '@/components/ChatMessage.vue'
 import ChatInput from '@/components/ChatInput.vue'
 import VoiceInput from '@/components/VoiceInput.vue'
 import ImageSelect from '@/components/ImageSelect.vue'
+
+const router = useRouter()
 
 const store = useChatStore()
 const listEl = ref<HTMLElement | null>(null)
@@ -85,6 +88,16 @@ watch(() => store.messages.length, () => scrollToBottom())
     <!-- 顶栏 -->
     <header class="shrink-0 border-b border-stone-200 bg-white px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-3">
+        <button
+          type="button"
+          class="flex items-center gap-1 text-xs text-stone-500 hover:text-indigo-600 transition-colors"
+          @click="router.push('/home')"
+        >
+          <svg viewBox="0 0 24 24" fill="none" class="w-4 h-4" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+          </svg>
+          首页
+        </button>
         <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-semibold">
           民
         </div>
