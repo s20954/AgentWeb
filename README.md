@@ -2,7 +2,7 @@
 
 > 替用户做减法的民宿预约顾问 —— 用户带来一句话，带走一个决断。不是搜索引擎，是决策助手。
 
-参加「全国高校 AI Web 开发挑战赛（传智杯）」的 AI Native Web 应用。前端 Vue3 主角，后端 Java Spring Boot 轻接入层（仅做 AI 接入）。
+  前端 Vue3 主角，后端 Java Spring Boot 轻接入层（仅做 AI 接入）。
 
 ---
 
@@ -114,6 +114,4 @@ cd frontend && npm run build    # 前端类型检查 + 生产构建
 cp deploy/.env.example deploy/.env
 ```
 
----
-
-*赛事评分是北极星，每个 PR 自问「这对应哪个得分点」。*
+--
