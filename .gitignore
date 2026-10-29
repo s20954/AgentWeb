@@ -1,0 +1,34 @@
+# === 依赖 / 构建产物 ===
+node_modules/
+dist/
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+*.tsbuildinfo
+
+# === 环境变量与密钥（绝不入仓库）===
+.env
+.env.*
+!.env.example
+
+# === 日志 ===
+*.log
+logs/
+*.err
+
+# === 本地工具 / 二进制 ===
+tools/nginx-1.26.2/
+tools/*.zip
+
+# === IDE / 系统 ===
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# === 运行时数据 ===
+data/
+*.db
+*.sqlite

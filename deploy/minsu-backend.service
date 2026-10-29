@@ -1,0 +1,18 @@
+[Unit]
+Description=Minsu Booking Agent Backend
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/minsu
+EnvironmentFile=/opt/minsu/.env
+ExecStart=/usr/bin/java -Xmx512m -jar /opt/minsu/minsu-backend.jar --server.port=8080
+Restart=always
+RestartSec=5
+SuccessExitStatus=143
+StandardOutput=append:/opt/minsu/logs/app.log
+StandardError=append:/opt/minsu/logs/app.log
+
+[Install]
+WantedBy=multi-user.target
