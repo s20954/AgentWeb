@@ -11,19 +11,26 @@ const store = useChatStore()
 const listEl = ref<HTMLElement | null>(null)
 const inputText = ref('')
 
-/** 联网搜索状态。 */
+/** 联网搜索开关（输入框旁，DeepSeek 风格）。 */
+const webSearchOn = ref(false)
 const searching = ref(false)
-const showSearch = ref(false)
-const searchText = ref('')
 
 /** 语音 / 看图选房识别结果填入输入框（不自动发送，用户可改后手动回车）。 */
 function fillInput(text: string): void {
   inputText.value = text
 }
 
+/** 输入框发送：根据开关决定走普通对话还是智能检索。 */
+async function handleSend(text: string, webSearch: boolean): Promise<void> {
+  if (webSearch) {
+    await doSearch(text)
+  } else {
+    store.send(text)
+  }
+}
+
 /** 执行智能检索（先查知识库 → 再联网 → 整合）：把结果整理成一条 Agent 消息插入。 */
-async function doSearch(): Promise<void> {
-  const q = searchText.value.trim()
+async function doSearch(q: string): Promise<void> {
   if (!q || searching.value) return
   searching.value = true
   try {
@@ -51,8 +58,6 @@ async function doSearch(): Promise<void> {
       content,
       steps: steps.map((s) => ({ type: s.type, message: s.message })),
     })
-    searchText.value = ''
-    showSearch.value = false
   } finally {
     searching.value = false
   }
@@ -92,13 +97,6 @@ watch(() => store.messages.length, () => scrollToBottom())
         <button
           type="button"
           class="text-xs text-stone-400 hover:text-indigo-600 transition-colors"
-          @click="showSearch = !showSearch"
-        >
-          {{ showSearch ? '收起搜索' : '联网搜索' }}
-        </button>
-        <button
-          type="button"
-          class="text-xs text-stone-400 hover:text-indigo-600 transition-colors"
           @click="store.exportMarkdown()"
         >
           导出对话
@@ -112,27 +110,6 @@ watch(() => store.messages.length, () => scrollToBottom())
         </button>
       </div>
     </header>
-
-    <!-- 联网搜索输入区 -->
-    <div v-if="showSearch" class="shrink-0 border-b border-stone-200 bg-indigo-50 px-4 py-2">
-      <div class="flex items-center gap-2">
-        <input
-          v-model="searchText"
-          type="text"
-          placeholder="输入要联网搜索的问题，如：莫干山 2026 红叶最佳观赏期"
-          class="flex-1 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          @keydown.enter.prevent="doSearch"
-        />
-        <button
-          type="button"
-          :disabled="searching || !searchText.trim()"
-          class="shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          @click="doSearch"
-        >
-          {{ searching ? '搜索中…' : '搜索' }}
-        </button>
-      </div>
-    </div>
 
     <!-- 消息列表 -->
     <main ref="listEl" class="flex-1 overflow-y-auto px-4 py-4 space-y-4">
@@ -166,13 +143,19 @@ watch(() => store.messages.length, () => scrollToBottom())
       </template>
     </main>
 
-    <!-- 输入框区域（语音 + 看图选房 + 文本输入） -->
+    <!-- 输入框区域（语音 + 看图选房 + 联网搜索开关 + 文本输入） -->
     <div class="border-t border-stone-200 bg-white px-4 py-3">
       <div class="flex items-center gap-2 mb-2">
         <VoiceInput @recognized="fillInput" />
         <ImageSelect @recognized="fillInput" />
       </div>
-      <ChatInput v-model="inputText" :loading="store.loading" @send="store.send" />
+      <ChatInput
+        v-model="inputText"
+        :loading="store.loading || searching"
+        :web-search="webSearchOn"
+        @send="handleSend"
+        @toggle-web-search="webSearchOn = !webSearchOn"
+      />
     </div>
   </div>
 </template>

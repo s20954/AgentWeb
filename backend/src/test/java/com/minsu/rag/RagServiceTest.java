@@ -20,7 +20,10 @@ class RagServiceTest {
 
     @BeforeEach
     void setUp() {
-        ragService = new RagService(new KbStore());
+        // 用临时目录的 SQLite 文件，避免测试污染真实 data/kb.db
+        String tmpDb = System.getProperty("java.io.tmpdir") + "/minsu-kb-test-" + System.nanoTime() + ".db";
+        KbRepository repo = new KbRepository(tmpDb);
+        ragService = new RagService(new KbStore(repo));
     }
 
     @Test

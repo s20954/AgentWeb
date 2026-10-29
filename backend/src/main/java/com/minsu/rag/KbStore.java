@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -12,14 +14,20 @@ import org.springframework.stereotype.Component;
  * <p>覆盖：5 片区的介绍与定位、宠物/退房/发票/停车等 FAQ、房源特色、周边徒步/餐饮/亲子攻略。
  * 内容尽量具体、有真实感，保证演示时可解释。生产环境可替换为数据库 / 向量库，接口 {@link #documents()} 不变。
  *
- * <p><b>动态沉淀</b>：{@link #addDocument(String, String, String)} 支持把「联网搜索后整理的新知识」
+ * <p><b>动态沉淀 + SQLite 持久化</b>：{@link #addDocument(String, String, String)} 支持把「联网搜索后整理的新知识」
  * 追加进知识库（同内容去重），下次同类问题可直接命中本地知识库，无需重复联网。
+ * 沉淀的知识会同步写入 SQLite（{@link KbRepository}），服务重启后自动加载回来，实现「知识复利、重启不丢」。
  */
 @Component
 public class KbStore {
 
+    private static final Logger log = LoggerFactory.getLogger(KbStore.class);
+
     /** 动态文档自增 ID 前缀。 */
     private final AtomicInteger seq = new AtomicInteger(0);
+
+    /** SQLite 持久化仓库（仅用于沉淀知识的落盘与加载）。 */
+    private final KbRepository repository;
 
     /** 内置 15 条初始文档。 */
     private static final List<KbDocument> SEED_DOCS = List.of(
@@ -80,12 +88,27 @@ public class KbStore {
     /** 动态知识库（初始含 15 条种子文档，之后可持续追加联网沉淀的知识）。 */
     private final List<KbDocument> docs = new CopyOnWriteArrayList<>(SEED_DOCS);
 
+    public KbStore(KbRepository repository) {
+        this.repository = repository;
+        // 启动时从 SQLite 加载历史沉淀的知识，实现「重启不丢」
+        int loaded = 0;
+        for (KbDocument d : repository.loadAll()) {
+            if (d.content() != null && !d.content().isBlank()) {
+                docs.add(d);
+                loaded++;
+            }
+        }
+        if (loaded > 0) {
+            log.info("已从 SQLite 加载 {} 条沉淀知识", loaded);
+        }
+    }
+
     public List<KbDocument> documents() {
         return docs;
     }
 
     /**
-     * 追加一条知识文档（联网结果沉淀）。
+     * 追加一条知识文档（联网结果沉淀），并同步写入 SQLite 持久化。
      *
      * @param id       文档 ID（为空则自动生成）
      * @param category 分类（如「联网沉淀」）
@@ -97,7 +120,7 @@ public class KbStore {
             return null;
         }
         String trimmed = content.trim();
-        // 去重：同内容（忽略空白差异）不重复追加
+        // 去重：同内容（忽略空白差异）不重复追加（内存 + SQLite 双查）
         for (KbDocument d : docs) {
             if (d.content().trim().equals(trimmed)) {
                 return null;
@@ -106,7 +129,12 @@ public class KbStore {
         String docId = (id == null || id.isBlank())
                 ? "web-" + seq.incrementAndGet()
                 : id;
-        docs.add(new KbDocument(docId, category == null ? "联网沉淀" : category, trimmed));
+        String cat = category == null ? "联网沉淀" : category;
+
+        // 先写 SQLite（成功与否都继续进内存，保证本次检索可用）
+        repository.insert(docId, cat, trimmed);
+
+        docs.add(new KbDocument(docId, cat, trimmed));
         return docId;
     }
 }

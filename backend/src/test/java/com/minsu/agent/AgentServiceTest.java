@@ -33,7 +33,8 @@ class AgentServiceTest {
     @BeforeEach
     void setUp() {
         ToolDispatcher dispatcher = new ToolDispatcher(new ToolRegistry(), new RoomStore(), new OrderStore(),
-                new RagService(new KbStore()));
+                new RagService(new KbStore(new com.minsu.rag.KbRepository(
+                        System.getProperty("java.io.tmpdir") + "/minsu-kb-test-" + System.nanoTime() + ".db"))));
         // 用未配置的 LLM client（本轮骨架确定性逻辑不依赖 LLM，仅保留注入）
         LlmClient noopLlm = new LlmClient() {
             @Override

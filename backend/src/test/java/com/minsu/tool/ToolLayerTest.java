@@ -28,7 +28,8 @@ class ToolLayerTest {
     @BeforeEach
     void setUp() {
         dispatcher = new ToolDispatcher(new ToolRegistry(), new RoomStore(), new OrderStore(),
-                new RagService(new KbStore()));
+                new RagService(new KbStore(new com.minsu.rag.KbRepository(
+                        System.getProperty("java.io.tmpdir") + "/minsu-kb-test-" + System.nanoTime() + ".db"))));
     }
 
     // ---------------------------------------------------------------- Schema
