@@ -1,0 +1,23 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: minsu-agent-backend
+
+# 日志
+logging:
+  level:
+    com.minsu: INFO
+
+# 应用自定义配置（后续 RAG / LLM / 视觉模型在此扩展，密钥走环境变量）
+app:
+  llm:
+    base-url: ${LLM_BASE_URL:https://api.deepseek.com}
+    api-key: ${LLM_API_KEY:}
+    model: ${LLM_MODEL:deepseek-chat}
+  vision:
+    base-url: ${VISION_BASE_URL:}
+    api-key: ${VISION_API_KEY:}
+    model: ${VISION_MODEL:}
+  vector-db-path: ${VECTOR_DB_PATH:./data/vectors.db}
