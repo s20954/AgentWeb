@@ -38,6 +38,12 @@ public class AgentService {
 
     /** 会话级状态缓存（sessionId -> AgentState），支撑多轮收敛。 */
     private final ConcurrentMap<String, AgentState> sessions = new ConcurrentHashMap<>();
+    /** 每个 sessionId 的最后活跃时间（用于过期清理，防内存泄漏）。 */
+    private final ConcurrentMap<String, Long> sessionTouch = new ConcurrentHashMap<>();
+    /** 会话状态上限：前端每次刷新都生成新 sessionId，不设上限会无界堆积（与 ConversationMemory 同款问题）。 */
+    private static final int MAX_SESSIONS = 1000;
+    /** 会话状态不活跃多久后清理（与 ConversationMemory TTL 对齐）。 */
+    private static final long SESSION_TTL_MS = 30 * 60 * 1000L;
 
     public AgentService(ToolDispatcher toolDispatcher, LlmClient llmClient, ConversationMemory conversationMemory) {
         this.toolDispatcher = toolDispatcher;
@@ -63,8 +69,10 @@ public class AgentService {
      * @return 最终文本回复
      */
     public String run(String sessionId, String userInput, EventSink sink) {
-        // 取旧会话状态（多轮累积），无则新建
+        // 取旧会话状态（多轮累积），无则新建；先清扫过期/超限条目，防内存泄漏
+        evictSessionsIfNeeded();
         AgentState state = sessions.computeIfAbsent(sessionId, k -> new AgentState());
+        sessionTouch.put(sessionId, System.currentTimeMillis());
         // 对话记忆：本会话之前的问答历史，供最终话术生成时带上上下文
         List<LlmMessage> history = conversationMemory.recent(sessionId);
 
@@ -134,27 +142,48 @@ public class AgentService {
                 .compile("(20\\d{2})?\\s*年?\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]?\\s*(?:到|至|~|-)\\s*(?:(\\d{1,2})\\s*月)?\\s*(\\d{1,2})\\s*[日号]?");
         java.util.regex.Matcher rm = rangePat.matcher(input);
         if (rm.find()) {
-            String year = rm.group(1) == null ? "2026" : rm.group(1);
             String checkInMonth = rm.group(2);
             String checkInDay = rm.group(3);
             // 第二段月份（group 4）可能为 null（同月），null 时沿用第一段月份
             String checkOutMonth = rm.group(4) == null ? checkInMonth : rm.group(4);
             String checkOutDay = rm.group(5);
-            checkInDate = java.time.LocalDate.of(
-                    Integer.parseInt(year), Integer.parseInt(checkInMonth), Integer.parseInt(checkInDay));
-            checkOutDate = java.time.LocalDate.of(
-                    Integer.parseInt(year), Integer.parseInt(checkOutMonth), Integer.parseInt(checkOutDay));
+            try {
+                int year = rm.group(1) == null ? java.time.LocalDate.now().getYear() : Integer.parseInt(rm.group(1));
+                checkInDate = java.time.LocalDate.of(year, Integer.parseInt(checkInMonth), Integer.parseInt(checkInDay));
+                checkOutDate = java.time.LocalDate.of(year, Integer.parseInt(checkOutMonth), Integer.parseInt(checkOutDay));
+                // 跨年范围（如「12月28日到1月2日」）：离店月份小于入住月份，离店落到下一年
+                if (!checkOutDate.isAfter(checkInDate)) {
+                    checkOutDate = checkOutDate.plusYears(1);
+                }
+                // 未显式给年份且入住日期已过，默认指向明年（不存在订过去日期的场景）
+                if (rm.group(1) == null && checkInDate.isBefore(java.time.LocalDate.now())) {
+                    checkInDate = checkInDate.plusYears(1);
+                    checkOutDate = checkOutDate.plusYears(1);
+                }
+            } catch (java.time.DateTimeException | NumberFormatException e) {
+                // 非法日期（如「13月40日」）：视为未识别，交给缺口追问，而不是让流程崩溃
+                checkInDate = null;
+                checkOutDate = null;
+            }
         } else {
             // 无「到/至」范围 → 找单个「M月D日」
             java.util.regex.Matcher single = java.util.regex.Pattern
                     .compile("(20\\d{2})?\\s*年?\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]?")
                     .matcher(input);
             if (single.find()) {
-                String year = single.group(1) == null ? "2026" : single.group(1);
-                checkInDate = java.time.LocalDate.of(
-                        Integer.parseInt(year),
-                        Integer.parseInt(single.group(2)),
-                        Integer.parseInt(single.group(3)));
+                try {
+                    int year = single.group(1) == null ? java.time.LocalDate.now().getYear() : Integer.parseInt(single.group(1));
+                    checkInDate = java.time.LocalDate.of(year,
+                            Integer.parseInt(single.group(2)),
+                            Integer.parseInt(single.group(3)));
+                    // 未显式给年份且日期已过，默认指向明年
+                    if (single.group(1) == null && checkInDate.isBefore(java.time.LocalDate.now())) {
+                        checkInDate = checkInDate.plusYears(1);
+                    }
+                } catch (java.time.DateTimeException | NumberFormatException e) {
+                    // 非法日期（如「13月40日」）：视为未识别，交给缺口追问
+                    checkInDate = null;
+                }
                 // 由「住N晚/住N天/就一天」推导 checkOut；否则默认住 1 晚
                 int nights = 1;
                 java.util.regex.Matcher nm = java.util.regex.Pattern
@@ -165,7 +194,7 @@ public class AgentService {
                 } else if (input.contains("就一天") || input.contains("只住一天") || input.contains("住一晚") || input.contains("一天")) {
                     nights = 1;
                 }
-                checkOutDate = checkInDate.plusDays(nights);
+                checkOutDate = checkInDate == null ? null : checkInDate.plusDays(nights);
             }
         }
         if (checkInDate != null && checkOutDate != null) {
@@ -185,11 +214,12 @@ public class AgentService {
         if (!budgetMatched && state.getBudgetPerNight() == null) {
             // 裸数字兜底：一句话里只有一个 3 位以上数字且无日期上下文，视为预算
             java.util.regex.Matcher bare = java.util.regex.Pattern
-                    .compile("(?<![\\d月])(\\d{3,4})(?![\\d月])")
+                    .compile("(?<![\\d年月])(\\d{3,4})(?![\\d年月])")
                     .matcher(input);
             if (bare.find()) {
                 int v = Integer.parseInt(bare.group(1));
-                if (v >= 200 && v <= 5000) {
+                // 排除 20xx：落在该区间的裸数字大概率是年份（如「2026」）而非每晚预算
+                if (v >= 200 && v <= 5000 && !(v >= 2000 && v <= 2099)) {
                     state.setBudgetPerNight(v);
                 }
             }
@@ -361,7 +391,28 @@ public class AgentService {
         return template;
     }
 
-    private static String pad(String s) {
-        return s.length() == 1 ? "0" + s : s;
+    /**
+     * 清扫过期/超限的会话状态（对齐 ConversationMemory 的 evict 模式）：
+     * 先按 TTL 清掉长期未活跃的，仍超上限则按最久未活跃淘汰，防内存泄漏。
+     */
+    private void evictSessionsIfNeeded() {
+        long now = System.currentTimeMillis();
+        sessionTouch.forEach((id, lastTouch) -> {
+            if (now - lastTouch > SESSION_TTL_MS) {
+                sessions.remove(id);
+                sessionTouch.remove(id);
+            }
+        });
+        while (sessions.size() > MAX_SESSIONS) {
+            String oldest = sessionTouch.entrySet().stream()
+                    .min(Map.Entry.comparingByValue())
+                    .map(Map.Entry::getKey)
+                    .orElse(null);
+            if (oldest == null) {
+                break;
+            }
+            sessions.remove(oldest);
+            sessionTouch.remove(oldest);
+        }
     }
 }

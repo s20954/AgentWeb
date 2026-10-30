@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { marked } from 'marked'
+import { marked, Renderer, type Tokens } from 'marked'
 import type { ChatMessage } from '@/types/chat'
 import ThinkingChain from './ThinkingChain.vue'
 
@@ -11,8 +11,37 @@ const props = defineProps<{
 const isUser = computed(() => props.message.role === 'user')
 
 /**
+ * 消毒链接 href：marked 只做解析不做消毒，LLM/联网内容可构造
+ * [x](javascript:alert(1)) 这类危险协议链接。浏览器解析 href 前会先解码 HTML 实体，
+ * 所以检查前先解码实体并去掉空白/控制字符，防 `&#106;avascript:`、`java\tscript:` 绕过。
+ */
+function sanitizeHref(href: string): string {
+  const decoded = href
+    .replace(/&#x([0-9a-fA-F]+);?/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);?/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
+  const normalized = decoded.replace(/[\s\u0000-\u001f]+/g, '')
+  if (/^(javascript|vbscript|data):/i.test(normalized)) {
+    return ''
+  }
+  return href
+}
+
+// 自定义链接渲染：危险协议只渲染文本（不可点击）；正常链接新窗口打开
+const renderer = new Renderer()
+renderer.link = function (this: Renderer, { href, title, tokens }: Tokens.Link): string {
+  const text = this.parser.parseInline(tokens)
+  const safe = sanitizeHref(href ?? '')
+  if (!safe) {
+    return text
+  }
+  const titleAttr = title ? ` title="${title}"` : ''
+  return `<a href="${safe}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
+}
+marked.use({ renderer })
+
+/**
  * Agent 回复按 Markdown 渲染（标题/加粗/列表/引用/链接）。
- * 内容来自后端 LLM，先把原始 HTML 标签转义掉再解析，避免注入风险。
+ * 内容来自后端 LLM，先把原始 HTML 标签转义掉再解析，配合链接消毒防注入。
  */
 const rendered = computed(() => {
   const safe = props.message.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')

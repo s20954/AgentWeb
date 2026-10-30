@@ -92,14 +92,25 @@ public class KbStore {
         this.repository = repository;
         // 启动时从 SQLite 加载历史沉淀的知识，实现「重启不丢」
         int loaded = 0;
+        int maxSeq = 0;
         for (KbDocument d : repository.loadAll()) {
             if (d.content() != null && !d.content().isBlank()) {
                 docs.add(d);
                 loaded++;
+                // 把已有 "web-N" 沉淀的最大序号作为 seq 水位：否则重启后 seq 归 0，
+                // 新生成的 id 与库中已有主键冲突，被 INSERT OR IGNORE 静默丢弃，知识重启后丢失
+                if (d.id() != null && d.id().startsWith("web-")) {
+                    try {
+                        maxSeq = Math.max(maxSeq, Integer.parseInt(d.id().substring(4)));
+                    } catch (NumberFormatException ignored) {
+                        // 非数字后缀的 id 不影响水位
+                    }
+                }
             }
         }
+        seq.set(maxSeq);
         if (loaded > 0) {
-            log.info("已从 SQLite 加载 {} 条沉淀知识", loaded);
+            log.info("已从 SQLite 加载 {} 条沉淀知识（seq 水位={}）", loaded, maxSeq);
         }
     }
 

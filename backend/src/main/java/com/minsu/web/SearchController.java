@@ -71,6 +71,8 @@ public class SearchController {
 
     /** 追问挂起的会话存活时间（10 分钟）。 */
     private static final long CLARIFY_TTL_MS = 10 * 60 * 1000L;
+    /** 挂起追问的会话上限：不设上限且过期条目只在同 sessionId 再访问时清理，会被刷量打爆内存。 */
+    private static final int MAX_PENDING_CLARIFICATIONS = 1000;
 
     /** 人数/同行人群线索（俩人、情侣、亲子、朋友、独自…）。 */
     private static final Pattern PEOPLE_HINT = Pattern.compile(
@@ -110,7 +112,10 @@ public class SearchController {
      */
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public Mono<Map<String, Object>> search(@RequestBody(required = false) Map<String, Object> body) {
-        String query = body == null ? null : String.valueOf(body.getOrDefault("query", ""));
+        // 注意不能用 getOrDefault("query","")：客户端传 {"query":null} 时 key 存在、值为 null，
+        // getOrDefault 不兜底，String.valueOf(null) 会变成字符串 "null" 继续走检索
+        Object rawQuery = body == null ? null : body.get("query");
+        String query = rawQuery == null ? null : String.valueOf(rawQuery);
         if (query == null || query.isBlank()) {
             return Mono.just(Map.of("error", "PARAM_INVALID", "message", "缺少 query 参数"));
         }
@@ -125,6 +130,8 @@ public class SearchController {
 
     private Map<String, Object> doSearch(String query, String sessionId) {
 
+        // 先清扫过期/超限的挂起追问，防内存泄漏
+        evictPendingClarificationsIfNeeded();
         // 用户本轮的原始输入（用于写入对话记忆；query 可能被追问合并改写，不改写记忆里的原文）
         final String rawQuery = query;
         // ---- 对话记忆：取出本会话之前的问答历史，让本轮回答带着上下文（不再每句从零开始）----
@@ -273,6 +280,22 @@ public class SearchController {
             return query; // 已过期，按新需求处理
         }
         return pending.originalQuery() + "。补充信息：" + query;
+    }
+
+    /** 清扫过期/超限的挂起追问：先按过期时间清，仍超上限则按最早过期淘汰（对齐 ConversationMemory 的 evict 模式）。 */
+    private void evictPendingClarificationsIfNeeded() {
+        long now = System.currentTimeMillis();
+        pendingClarifications.entrySet().removeIf(e -> e.getValue().expireAt() < now);
+        while (pendingClarifications.size() > MAX_PENDING_CLARIFICATIONS) {
+            String oldest = pendingClarifications.entrySet().stream()
+                    .min((a, b) -> Long.compare(a.getValue().expireAt(), b.getValue().expireAt()))
+                    .map(Map.Entry::getKey)
+                    .orElse(null);
+            if (oldest == null) {
+                break;
+            }
+            pendingClarifications.remove(oldest);
+        }
     }
 
     /**

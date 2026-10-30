@@ -71,7 +71,7 @@ public class ChatController {
                     String json = objectMapper.writeValueAsString(data);
                     sink.tryEmitNext(ServerSentEvent.<String>builder(json).event(type).build());
                 } catch (Exception e) {
-                    sink.tryEmitNext(ServerSentEvent.<String>builder(e.getMessage()).event("error").build());
+                    emitError(sink, e);
                 }
             }
         };
@@ -82,12 +82,25 @@ public class ChatController {
                 agentService.run(sessionId, message, eventSink);
                 sink.tryEmitNext(ServerSentEvent.<String>builder("{}").event("done").build());
             } catch (Exception e) {
-                sink.tryEmitNext(ServerSentEvent.<String>builder(e.getMessage()).event("error").build());
+                emitError(sink, e);
             } finally {
                 sink.tryEmitComplete();
             }
         });
 
         return sink.asFlux();
+    }
+
+    /**
+     * 推 error 事件。错误消息必须走 JSON 序列化（与 text 事件口径一致）：
+     * 裸发 message 若含换行会破坏 SSE 帧格式，前端 {@code parseTextPayload} 也按 JSON 解析。
+     */
+    private void emitError(Sinks.Many<ServerSentEvent<String>> sink, Exception e) {
+        String msg = e.getMessage() == null ? e.toString() : e.getMessage();
+        try {
+            sink.tryEmitNext(ServerSentEvent.<String>builder(objectMapper.writeValueAsString(msg)).event("error").build());
+        } catch (Exception ignored) {
+            // 序列化一个字符串不会失败；保底不阻断主流程
+        }
     }
 }
