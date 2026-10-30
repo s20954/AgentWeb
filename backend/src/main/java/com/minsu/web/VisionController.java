@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.minsu.agent.llm.DeepSeekLlmClient;
 
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 视觉代理端点 —— 「看图选房」：接收图片 base64，推断用户偏好的房源风格/预算倾向。
@@ -53,16 +54,19 @@ public class VisionController {
             return Mono.just(fallback());
         }
 
-        try {
-            String content = llmClient.chatVision(req.imageBase64(), mimeType(req), visionPrompt());
-            Map<String, Object> parsed = parseVisionJson(content);
-            parsed.put("fallback", false);
-            return Mono.just(parsed);
-        } catch (Exception e) {
-            Map<String, Object> f = fallback();
-            f.put("fallback", true);
-            return Mono.just(f);
-        }
+        // 视觉模型调用是阻塞 IO，不能在 WebFlux 事件循环上 block()，移到 boundedElastic
+        return Mono.fromCallable(() -> {
+            try {
+                String content = llmClient.chatVision(req.imageBase64(), mimeType(req), visionPrompt());
+                Map<String, Object> parsed = parseVisionJson(content);
+                parsed.put("fallback", false);
+                return parsed;
+            } catch (Exception e) {
+                Map<String, Object> f = fallback();
+                f.put("fallback", true);
+                return f;
+            }
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     /** 视觉分析提示词：要求输出结构化 JSON 标签。 */

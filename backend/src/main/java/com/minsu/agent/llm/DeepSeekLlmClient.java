@@ -6,6 +6,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -22,6 +24,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 @Component
 public class DeepSeekLlmClient implements LlmClient {
 
+    private static final Logger log = LoggerFactory.getLogger(DeepSeekLlmClient.class);
+
     private final WebClient webClient;
     private final String apiKey;
     private final String model;
@@ -36,6 +40,12 @@ public class DeepSeekLlmClient implements LlmClient {
                 .baseUrl(baseUrl)
                 .defaultHeader("Content-Type", "application/json")
                 .build();
+        // 启动即暴露配置状态：此前「终端没 export LLM_API_KEY」会静默降级，排查全靠猜
+        if (isConfigured()) {
+            log.info("LLM 已配置：model={}, baseUrl={}", model, baseUrl);
+        } else {
+            log.warn("LLM_API_KEY 未配置（环境变量与 deploy/.env 均未读到），AI 规划/润色将降级为模板拼接");
+        }
     }
 
     @Override

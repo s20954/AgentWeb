@@ -24,6 +24,12 @@ import com.minsu.agent.llm.LlmClient;
 import com.minsu.agent.llm.LlmMessage;
 import com.minsu.rag.RagService;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+
 /**
  * 智能检索接口 —— 「先查本地知识库，再联网补充，最后由 LLM 规划整理」。
  *
@@ -41,6 +47,8 @@ import com.minsu.rag.RagService;
 @RestController
 @RequestMapping("/api/search")
 public class SearchController {
+
+    private static final Logger log = LoggerFactory.getLogger(SearchController.class);
 
     /** 常见国内目的地/城市白名单（含省、市、景区名），用于从口语中抽取搜索关键词。 */
     private static final List<String> DESTINATIONS = List.of(
@@ -75,11 +83,18 @@ public class SearchController {
      * 返回：{@code {"query","kbResults":[...],"webResults":[...],"answer","sources"}}
      */
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public Map<String, Object> search(@RequestBody(required = false) Map<String, Object> body) {
+    public Mono<Map<String, Object>> search(@RequestBody(required = false) Map<String, Object> body) {
         String query = body == null ? null : String.valueOf(body.getOrDefault("query", ""));
         if (query == null || query.isBlank()) {
-            return Map.of("error", "PARAM_INVALID", "message", "缺少 query 参数");
+            return Mono.just(Map.of("error", "PARAM_INVALID", "message", "缺少 query 参数"));
         }
+        final String q = query;
+        // 联网抓取与 LLM 调用都是阻塞 IO，WebFlux 事件循环上 block() 会直接抛异常，
+        // 整体移到 boundedElastic 线程执行（与 ChatController 的虚拟线程思路一致）
+        return Mono.fromCallable(() -> doSearch(q)).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private Map<String, Object> doSearch(String query) {
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("query", query);
@@ -157,11 +172,18 @@ public class SearchController {
 
         // ---- 第 3 步：整合两路结果，组织最终回答 ----
         // 优先：把「需求 + 知识库 + 联网素材」喂给 LLM，走七步收敛输出结构化规划方案；
-        // 降级：LLM 未配置（无 key）时，用拼接字符串兜底，保证仍能返回可读结果。
+        // 降级：LLM 未配置（无 key）或调用失败时，用拼接字符串兜底，保证仍能返回可读结果。
         List<String> sources = new ArrayList<>();
         String answer;
+        boolean llmPlanned = false; // 本次是否真正由 LLM 产出了规划（决定后续是否允许沉淀）
         if (llmClient.isConfigured()) {
-            answer = planWithLlm(query, kbHit, kbResults, webAnswer, webResults, sources);
+            String planned = planWithLlm(query, kbHit, kbResults, webAnswer, webResults, sources);
+            if (planned != null) {
+                answer = planned;
+                llmPlanned = true;
+            } else {
+                answer = assembleAnswer(query, kbHit, kbResults, webAnswer, webResults, sources);
+            }
         } else {
             answer = assembleAnswer(query, kbHit, kbResults, webAnswer, webResults, sources);
         }
@@ -172,7 +194,8 @@ public class SearchController {
                 : (!kbHit && !webResults.isEmpty()) ? "web" : "kb+web");
 
         // ---- 第 4 步：联网得到的有效内容沉淀回知识库（下次直接本地命中，无需再联网）----
-        boolean sunk = sinkToKnowledgeBase(query, kbHit, webAnswer, webResults);
+        // 只有「LLM 规划成功」才沉淀，降级拼接的原始搜索结果（可能含百科/字典类噪音）不沉淀，避免污染知识库。
+        boolean sunk = llmPlanned && sinkToKnowledgeBase(query, kbHit, webAnswer, webResults);
         out.put("sunkToKb", sunk);
 
         return out;
@@ -288,6 +311,8 @@ public class SearchController {
      *
      * <p>这是「联网搜索」价值的核心：不再把搜索结果标题原样甩给用户，
      * 而是让 LLM 基于真实搜索到的内容自主思考、整理、规划，交付一份可直接使用的方案。
+     *
+     * <p>返回 {@code null} 表示规划失败（LLM 调用异常或返回为空），由调用方降级到字符串拼接。
      */
     private String planWithLlm(String query, boolean kbHit, List<Map<String, Object>> kbResults,
                                String webAnswer, List<Map<String, Object>> webResults,
@@ -351,10 +376,11 @@ public class SearchController {
                 return resp.content();
             }
         } catch (Exception e) {
-            // LLM 调用失败 → 降级到字符串拼接，不阻断返回
+            // LLM 调用失败 → 返回 null，由调用方降级到字符串拼接；日志必须留痕，别再静默
+            log.warn("LLM 规划失败，降级为拼接返回：{}", e.toString());
         }
-        // 降级
-        return assembleAnswer(query, kbHit, kbResults, webAnswer, webResults, sources);
+        // 规划失败（调用异常 / 返回为空），返回 null 交由调用方降级，不在此处拼接
+        return null;
     }
 
     /** 整合知识库 + 网络结果，组织一段自然语言回答。 */

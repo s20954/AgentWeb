@@ -4,6 +4,15 @@ server:
 spring:
   application:
     name: minsu-agent-backend
+  # 强制 JVM 使用 UTF-8（Windows 默认 GBK 会导致中文日志乱码）
+  mandatory-file-encoding: UTF-8
+  # 兜底读取 deploy/.env（OS 环境变量优先级仍最高）。
+  # 修复：后端进程能否走 LLM 分支曾取决于「启动终端是否 export 了 LLM_API_KEY」，
+  # 现在即使终端没配，也会自动加载 deploy/.env，避免静默降级为联网拼接。
+  config:
+    import:
+      - optional:file:./deploy/.env[.properties]
+      - optional:file:../deploy/.env[.properties]
 
 # 日志
 logging:
