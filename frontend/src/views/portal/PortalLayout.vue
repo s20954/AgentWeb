@@ -108,7 +108,6 @@ function go(path: string): void {
     <footer class="border-t border-stone-200 bg-white">
       <div class="max-w-6xl mx-auto px-4 sm:px-6 py-8 text-center text-sm text-stone-500">
         <p class="mb-1">民宿预约 Agent · 你带来一句话，带走一个决断</p>
-        <p>传智杯全国高校 AI Web 开发挑战赛参赛作品</p>
       </div>
     </footer>
   </div>

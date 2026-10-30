@@ -20,17 +20,20 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.minsu.agent.llm.LlmClient;
+import com.minsu.agent.llm.LlmMessage;
 import com.minsu.rag.RagService;
 
 /**
- * 智能检索接口 —— 「先查本地知识库，再联网补充，最后整合」。
+ * 智能检索接口 —— 「先查本地知识库，再联网补充，最后由 LLM 规划整理」。
  *
  * <p>检索策略（对齐用户预期）：
  * <ol>
  *   <li>先用 {@link RagService} 查本地知识库（莫干山片区/政策/房源/攻略）；</li>
  *   <li>若本地命中（最高分 ≥ 阈值），优先以本地知识为准，联网作为补充；</li>
- *   <li>若本地未命中，再联网搜索（DuckDuckGo 免 key），把网络结果带回；</li>
- *   <li>最终把「知识库 + 网络」两路结果整合返回，各自标注来源，供前端展示。</li>
+ *   <li>若本地未命中，再联网搜索（必应），把网络结果带回；</li>
+ *   <li>把「用户需求 + 知识库 + 网络」三路素材喂给 LLM，走七步收敛思路，输出一份结构化、可执行的规划方案；</li>
+ *   <li>LLM 未配置时降级为「拼接字符串」，保证无 key 也能返回结果。</li>
  * </ol>
  *
  * <p>生产可替换联网服务（Bing/SerpAPI 等），接口签名不变。
@@ -58,9 +61,11 @@ public class SearchController {
     private static final int WEB_MAX = 5;
 
     private final RagService ragService;
+    private final LlmClient llmClient;
 
-    public SearchController(RagService ragService) {
+    public SearchController(RagService ragService, LlmClient llmClient) {
         this.ragService = ragService;
+        this.llmClient = llmClient;
     }
 
     /**
@@ -151,8 +156,15 @@ public class SearchController {
         }
 
         // ---- 第 3 步：整合两路结果，组织最终回答 ----
+        // 优先：把「需求 + 知识库 + 联网素材」喂给 LLM，走七步收敛输出结构化规划方案；
+        // 降级：LLM 未配置（无 key）时，用拼接字符串兜底，保证仍能返回可读结果。
         List<String> sources = new ArrayList<>();
-        String answer = assembleAnswer(query, kbHit, kbResults, webAnswer, webResults, sources);
+        String answer;
+        if (llmClient.isConfigured()) {
+            answer = planWithLlm(query, kbHit, kbResults, webAnswer, webResults, sources);
+        } else {
+            answer = assembleAnswer(query, kbHit, kbResults, webAnswer, webResults, sources);
+        }
         out.put("answer", answer);
         out.put("sources", sources);
         // 标记本次结果主来源（kb / web / kb+web）
@@ -269,6 +281,80 @@ public class SearchController {
         String kbContent = "关于「" + query + "」：联网了解到——" + content;
         String newId = ragService.addKnowledge("联网沉淀", kbContent);
         return newId != null;
+    }
+
+    /**
+     * 把「用户需求 + 知识库 + 联网素材」喂给 LLM，走七步收敛思路，输出结构化可执行的规划方案。
+     *
+     * <p>这是「联网搜索」价值的核心：不再把搜索结果标题原样甩给用户，
+     * 而是让 LLM 基于真实搜索到的内容自主思考、整理、规划，交付一份可直接使用的方案。
+     */
+    private String planWithLlm(String query, boolean kbHit, List<Map<String, Object>> kbResults,
+                               String webAnswer, List<Map<String, Object>> webResults,
+                               List<String> sources) {
+        // 组装素材
+        StringBuilder material = new StringBuilder();
+        if (kbHit && !kbResults.isEmpty()) {
+            material.append("【本地知识库】\n");
+            for (Map<String, Object> r : kbResults) {
+                material.append("- [").append(r.get("category")).append("] ").append(r.get("content")).append("\n");
+            }
+        }
+        if (webAnswer != null && !webAnswer.isBlank()) {
+            material.append("【联网摘要】\n").append(webAnswer).append("\n");
+        }
+        if (!webResults.isEmpty()) {
+            material.append("【联网结果】\n");
+            for (Map<String, Object> w : webResults) {
+                material.append("- ").append(w.get("title"));
+                if (w.get("snippet") != null && !String.valueOf(w.get("snippet")).isBlank()) {
+                    material.append("：").append(w.get("snippet"));
+                }
+                material.append("\n");
+            }
+        }
+        if (material.length() == 0) {
+            // 没有任何素材，让 LLM 基于自身知识直接规划（并提示可联网补充）
+            material.append("（本次未检索到额外的本地或联网素材，请基于你已有的知识进行规划）");
+        }
+
+        String systemPrompt = """
+                你是「替用户做减法的旅行规划顾问」。用户带来一句话需求，你要交付一份结构化、可执行的规划方案。
+
+                # 核心原则
+                - 你不是搜索引擎，不要把搜索结果标题和链接原样甩给用户。
+                - 你要基于下方提供的【素材】做自主思考、整理、规划，输出一份能直接照着执行的方案。
+                - 若素材不足以支撑完整规划，可以结合你已有的知识补充，但要诚实标注哪些是「素材中查到的」、哪些是「通用建议」。
+                - 禁止胡编乱造具体事实（如虚构的酒店名、精确的价格、具体餐厅电话）。不确定就写「建议到当地再确认」。
+
+                # 输出结构（用 Markdown，层次清晰）
+                1. **行程概览**：一句话总结 + 天数/人数/目的地。
+                2. **每日安排**：按 Day1、Day2… 列出，每天包含「上午 / 下午 / 晚上」的关键安排与理由。
+                3. **住宿建议**：住哪个片区、为什么、大致价位。
+                4. **美食/体验清单**：推荐吃什么、体验什么（来自素材则优先采用）。
+                5. **交通与注意事项**：怎么去、当地交通、需要提前准备/预约的事项。
+                6. **一句话结论**：给用户一个明确的下一步动作。
+
+                # 要求
+                - 语言自然、口语化、可直接读。
+                - 不要输出你的思考过程，直接输出方案本身。
+                - 若用户信息不全（没写日期/人数/预算），先按常见默认值规划并显式声明假设，不要反过来追问一堆问题。
+                """;
+
+        try {
+            List<LlmMessage> messages = List.of(
+                    LlmMessage.system(systemPrompt),
+                    LlmMessage.user("我的需求：" + query + "\n\n以下是可供规划参考的素材：\n" + material));
+            LlmClient.LlmResponse resp = llmClient.chat(messages, List.of());
+            if (resp != null && resp.content() != null && !resp.content().isBlank()) {
+                sources.add("AI 规划整理");
+                return resp.content();
+            }
+        } catch (Exception e) {
+            // LLM 调用失败 → 降级到字符串拼接，不阻断返回
+        }
+        // 降级
+        return assembleAnswer(query, kbHit, kbResults, webAnswer, webResults, sources);
     }
 
     /** 整合知识库 + 网络结果，组织一段自然语言回答。 */
