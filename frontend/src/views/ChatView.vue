@@ -32,36 +32,53 @@ async function handleSend(text: string, webSearch: boolean): Promise<void> {
   }
 }
 
-/** 执行智能检索（先查知识库 → 再联网 → 整合）：把结果整理成一条 Agent 消息插入。 */
+/** 执行智能检索（先查知识库 → 再联网 → 整合）：思考链逐步上屏 + 结果打字机流式输出。 */
 async function doSearch(q: string): Promise<void> {
   if (!q || searching.value) return
   searching.value = true
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  // 1. 用户消息上屏（与普通对话一致）
+  store.messages.push({ id: `u-${Date.now()}`, role: 'user', content: q })
+
+  // 2. 先建空 Agent 消息（streaming 态），思考链随进度逐步追加
+  const agentId = `search-${Date.now()}`
+  store.messages.push({ id: agentId, role: 'agent', content: '', streaming: true, steps: [] })
+  // 通过 store 内的响应式元素更新（直接改局部对象引用 Vue 检测不到）
+  const agentMsg = () => store.messages.find((m) => m.id === agentId)!
+  agentMsg().steps = [{ type: 'LOADING_KNOWLEDGE', message: `先查本地知识库「${q}」…` }]
+
   try {
     const resp = await webSearch(q)
-    let content = ''
+    // 响应回来后，依次补「是否联网」「整合」两步，带小延时让过程可见
+    agentMsg().steps = [
+      ...agentMsg().steps!,
+      { type: 'FILTERING', message: resp.primarySource === 'kb' ? '知识库已命中，无需联网' : '知识库未命中，转联网搜索…' },
+    ]
+    await sleep(350)
+    agentMsg().steps = [...agentMsg().steps!, { type: 'PACKAGING', message: '整合知识库与联网结果…' }]
+    await sleep(400)
+
+    let content: string
     if (resp.error) {
       content = `（智能检索失败：${resp.message || resp.error}）`
     } else {
-      // 后端已整合好 answer，直接展示；再补来源说明
       content = resp.answer || '未找到相关信息，试试换个关键词。'
       if (resp.sources && resp.sources.length > 0) {
         content += `\n\n_来源：${resp.sources.join(' + ')}_`
       }
     }
-    // 思考链：分步骤展示「查知识库 → 联网 → 整合」
-    const steps = [
-      { type: 'LOADING_KNOWLEDGE', message: `先查本地知识库「${q}」…` },
-      { type: 'FILTERING', message: resp.primarySource === 'kb' ? '知识库已命中，无需联网' : '知识库未命中，转联网搜索…' },
-      { type: 'PACKAGING', message: '整合知识库与联网结果…' },
-    ] as const
-    // 作为一条 Agent 消息追加
-    store.messages.push({
-      id: `search-${Date.now()}`,
-      role: 'agent',
-      content,
-      steps: steps.map((s) => ({ type: s.type, message: s.message })),
-    })
+
+    // 3. 打字机式流式输出结果
+    const CHUNK = 12
+    for (let i = 0; i < content.length; i += CHUNK) {
+      agentMsg().content += content.slice(i, i + CHUNK)
+      await sleep(24)
+    }
+  } catch {
+    agentMsg().content = '（智能检索请求失败，请稍后重试）'
   } finally {
+    agentMsg().streaming = false
     searching.value = false
   }
 }

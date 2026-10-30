@@ -267,7 +267,7 @@ export const homestayList: Homestay[] = [
     price: 420,
     address: '陕西省西安市碑林区顺城巷',
     tags: ['城墙', '历史', '美食', '市中心'],
-    image: img('photo-1557928723-c2f3b0e5e25b'),
+    image: img('photo-1590490360182-c33d57733427'),
     description:
       '紧邻西安城墙，顺城巷夜生活丰富，步行逛回民街，感受千年古都烟火气。',
     area: '陕西西安',
@@ -309,7 +309,7 @@ export const homestayList: Homestay[] = [
     price: 650,
     address: '山东省青岛市市南区八大关',
     tags: ['海景', '欧式建筑', '栈桥', '亲子'],
-    image: img('photo-1552975284-3cb21ac92792'),
+    image: img('photo-1540541338287-41700207dee6'),
     description:
       '八大关欧式建筑群旁，红瓦绿树碧海蓝天，步行到海边栈桥，适合全家出游。',
     area: '山东青岛',
