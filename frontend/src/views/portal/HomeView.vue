@@ -52,16 +52,18 @@ const groups = computed(() => {
 
 <template>
   <div>
-    <!-- 沉浸式 hero：浅米色 + 宋体大字 + 搜索即入口 -->
-    <section class="hero relative overflow-hidden rounded-2xl shadow-lg bg-[#EFEAE0]">
+    <!-- 沉浸式 hero：墨绿深色 + 宋体大字 + 搜索即入口 -->
+    <section class="hero relative overflow-hidden rounded-2xl shadow-lg">
+      <div class="hero-bg absolute inset-0"></div>
+      <div class="absolute inset-0 bg-gradient-to-b from-[#0A1A17]/60 via-[#0F2420]/70 to-[#0A1A17]/90"></div>
       <div class="relative z-10 flex flex-col items-center text-center px-6 py-16 sm:py-24">
         <p class="text-xs sm:text-sm tracking-[0.5em] text-[#C8A96A] mb-4">衡门之下 · 可以栖迟</p>
-        <h1 class="font-serif-cn text-5xl sm:text-6xl font-semibold text-[#0F2420] tracking-[0.2em]">栖·迟</h1>
-        <p class="mt-4 text-sm sm:text-base text-[#0F2420]/70 tracking-[0.3em]">一语既出 · 佳宿自现</p>
+        <h1 class="font-serif-cn text-5xl sm:text-6xl font-semibold text-[#F3EFE7] tracking-[0.2em]">栖·迟</h1>
+        <p class="mt-4 text-sm sm:text-base text-[#F3EFE7]/70 tracking-[0.3em]">一语既出 · 佳宿自现</p>
 
         <!-- 搜索即入口 -->
         <div class="mt-9 w-full max-w-xl">
-          <div class="flex items-center rounded-full bg-white/90 shadow-[0_8px_30px_rgba(15,36,32,0.12)] pl-6 pr-2 py-2">
+          <div class="flex items-center rounded-full bg-[#F7F5F0]/95 shadow-[0_10px_36px_rgba(0,0,0,0.4)] pl-6 pr-2 py-2">
             <input
               v-model="heroQuery"
               type="text"
@@ -71,7 +73,7 @@ const groups = computed(() => {
             />
             <button
               type="button"
-              class="shrink-0 px-5 sm:px-7 py-2.5 rounded-full bg-[#1E4A3F] text-white text-sm font-medium hover:bg-[#163a31] transition-colors"
+              class="shrink-0 px-5 sm:px-7 py-2.5 rounded-full bg-[#1E4A3F] text-[#F7F5F0] text-sm font-medium hover:bg-[#163a31] transition-colors"
               @click="goAgent()"
             >
               为我定宿
@@ -82,7 +84,7 @@ const groups = computed(() => {
               v-for="c in heroChips"
               :key="c"
               type="button"
-              class="px-3.5 py-1.5 rounded-full border border-[#0F2420]/20 text-xs text-[#0F2420]/60 hover:text-[#0F2420] hover:border-[#C8A96A]/70 transition-colors"
+              class="px-3.5 py-1.5 rounded-full border border-[#F3EFE7]/25 text-xs text-[#F3EFE7]/65 hover:text-[#F3EFE7] hover:border-[#C8A96A]/60 transition-colors"
               @click="goAgent(c)"
             >
               {{ c }}
@@ -132,7 +134,7 @@ const groups = computed(() => {
     </template>
 
     <!-- 关于项目：浅色通栏信息区（铺满浏览器 100% 宽度） -->
-    <section class="mt-14 bg-[#EDEAE3] text-stone-700 overflow-hidden w-screen relative left-1/2 -translate-x-1/2">
+    <section class="mt-14 bg-[#EFEAE0] text-stone-700 overflow-hidden w-screen relative left-1/2 -translate-x-1/2">
       <div class="max-w-6xl mx-auto px-4 sm:px-6">
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 py-12 sm:py-14">
           <!-- 关于项目 -->
@@ -184,5 +186,12 @@ const groups = computed(() => {
 /* 宋体栈：不引外部字体（国内网络环境），用系统衬线 */
 .font-serif-cn {
   font-family: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+}
+
+/* hero 背景：竹林意象 + 墨绿渐变压暗 */
+.hero-bg {
+  background-image: url('https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1600&q=80');
+  background-size: cover;
+  background-position: center 40%;
 }
 </style>

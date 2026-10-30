@@ -105,7 +105,7 @@ function go(path: string): void {
     </main>
 
     <!-- 页脚 -->
-    <footer class="border-t border-stone-200 bg-white">
+    <footer class="border-t border-stone-200 bg-[#EFEAE0]">
       <div class="max-w-6xl mx-auto px-4 sm:px-6 py-8 text-center text-sm text-stone-500">
         <p class="mb-1">栖迟 Agent · 一语既出，佳宿自现</p>
       </div>
