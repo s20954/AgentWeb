@@ -1,25 +1,24 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { homestayList, banners, type Homestay } from '@/mock/data'
+import { homestayList, type Homestay } from '@/mock/data'
 
 const router = useRouter()
-const currentBanner = ref(0)
-let timer: ReturnType<typeof setInterval> | null = null
 
-function next(): void {
-  currentBanner.value = (currentBanner.value + 1) % banners.length
-}
-function go(id: number): void {
-  currentBanner.value = id
+/** 首屏搜索词：带去对话页预填，用户确认后发送。 */
+const heroQuery = ref('')
+
+function goAgent(q?: string): void {
+  const query = (q ?? heroQuery.value).trim()
+  if (query) {
+    router.push({ path: '/agent', query: { q: query } })
+  } else {
+    router.push('/agent')
+  }
 }
 
-onMounted(() => {
-  timer = setInterval(next, 4000)
-})
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
-})
+/** 快捷意象词条：一键带词进入对话。 */
+const heroChips = ['莫干山 · 竹海私汤', '成都 · 亲子院落', '大理 · 临海白桌', '带宠物入住']
 
 function goDetail(h: Homestay): void {
   router.push(`/homestay/${h.homestayId}`)
@@ -44,86 +43,81 @@ const groups = computed(() => {
 
 <template>
   <div>
-    <!-- 轮播横幅（真实照片背景） -->
-    <div class="relative h-64 sm:h-80 rounded-2xl overflow-hidden shadow-sm">
-      <div
-        v-for="(b, i) in banners"
-        :key="i"
-        class="absolute inset-0 flex flex-col items-center justify-center text-white transition-opacity duration-700"
-        :style="{
-          backgroundImage: b.image ? `url(${b.image})` : undefined,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          background: !b.image ? b.bg : undefined,
-          opacity: currentBanner === i ? 1 : 0,
-        }"
-      >
-        <div class="absolute inset-0 bg-gradient-to-r from-black/50 to-black/10"></div>
-        <div class="relative z-10 flex flex-col items-center">
-          <h2 class="text-3xl sm:text-4xl font-bold mb-2 drop-shadow-lg">{{ b.title }}</h2>
-          <p class="text-sm sm:text-base opacity-95 drop-shadow">{{ b.desc }}</p>
+    <!-- 沉浸式 hero：墨绿深色 + 宋体大字 + 搜索即入口 -->
+    <section class="hero relative overflow-hidden rounded-2xl shadow-lg">
+      <div class="hero-bg absolute inset-0"></div>
+      <div class="absolute inset-0 bg-gradient-to-b from-[#0A1A17]/60 via-[#0F2420]/70 to-[#0A1A17]/90"></div>
+      <div class="relative z-10 flex flex-col items-center text-center px-6 py-16 sm:py-24">
+        <p class="text-xs sm:text-sm tracking-[0.5em] text-[#C8A96A] mb-4">衡门之下 · 可以栖迟</p>
+        <h1 class="font-serif-cn text-5xl sm:text-6xl font-semibold text-[#F3EFE7] tracking-[0.2em]">栖·迟</h1>
+        <p class="mt-4 text-sm sm:text-base text-[#F3EFE7]/70 tracking-[0.3em]">一语既出 · 佳宿自现</p>
+
+        <!-- 搜索即入口 -->
+        <div class="mt-9 w-full max-w-xl">
+          <div class="flex items-center rounded-full bg-[#F7F5F0]/95 shadow-[0_10px_36px_rgba(0,0,0,0.4)] pl-6 pr-2 py-2">
+            <input
+              v-model="heroQuery"
+              type="text"
+              placeholder="说说你想去的地方、同行的人…"
+              class="flex-1 bg-transparent outline-none text-sm sm:text-base text-stone-700 placeholder-stone-400"
+              @keyup.enter="goAgent()"
+            />
+            <button
+              type="button"
+              class="shrink-0 px-5 sm:px-7 py-2.5 rounded-full bg-[#1E4A3F] text-[#F7F5F0] text-sm font-medium hover:bg-[#163a31] transition-colors"
+              @click="goAgent()"
+            >
+              为我定宿
+            </button>
+          </div>
+          <div class="mt-4 flex flex-wrap justify-center gap-2">
+            <button
+              v-for="c in heroChips"
+              :key="c"
+              type="button"
+              class="px-3.5 py-1.5 rounded-full border border-[#F3EFE7]/25 text-xs text-[#F3EFE7]/65 hover:text-[#F3EFE7] hover:border-[#C8A96A]/60 transition-colors"
+              @click="goAgent(c)"
+            >
+              {{ c }}
+            </button>
+          </div>
         </div>
       </div>
-      <!-- 指示点 -->
-      <div class="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 z-10">
-        <button
-          v-for="(_b, i) in banners"
-          :key="i"
-          type="button"
-          class="w-2 h-2 rounded-full transition-colors"
-          :class="currentBanner === i ? 'bg-white' : 'bg-white/50'"
-          @click="go(i)"
-        />
-      </div>
-    </div>
-
-    <!-- AI 助手入口横幅 -->
-    <div class="mt-6 rounded-2xl bg-gradient-to-r from-emerald-700 to-teal-600 p-6 sm:p-8 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-      <div>
-        <h3 class="text-xl sm:text-2xl font-bold mb-1">不知道住哪？让 AI 帮你决定</h3>
-        <p class="text-sm sm:text-base text-emerald-50">一句话描述需求，Agent 七步收敛，直接给你一个能决策的推荐。</p>
-      </div>
-      <button
-        type="button"
-        class="shrink-0 px-6 py-3 rounded-xl bg-white text-emerald-700 font-semibold hover:bg-emerald-50 transition-colors"
-        @click="router.push('/agent')"
-      >
-        立即体验
-      </button>
-    </div>
+    </section>
 
     <!-- 推荐民宿（按地区分组） -->
     <template v-for="g in groups" :key="g.area">
-      <div class="mt-8 mb-4 flex items-baseline justify-between">
-        <h3 class="text-xl font-bold text-stone-800">{{ g.area }}</h3>
+      <div class="mt-12 mb-5 flex items-baseline gap-3">
+        <span class="w-1 h-5 rounded-full bg-[#C8A96A]"></span>
+        <h3 class="font-serif-cn text-2xl font-semibold text-stone-800 tracking-wider">{{ g.area }}</h3>
         <span class="text-sm text-stone-400">共 {{ g.items.length }} 家民宿</span>
       </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
         <div
           v-for="item in g.items"
           :key="item.homestayId"
-          class="bg-white rounded-xl overflow-hidden cursor-pointer hover:-translate-y-1 hover:shadow-lg transition-all group"
+          class="bg-white rounded-xl overflow-hidden cursor-pointer shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group"
           @click="goDetail(item)"
         >
-          <div class="relative h-44 overflow-hidden">
-            <img :src="item.image" :alt="item.title" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-            <span class="absolute left-2.5 top-2.5 px-2 py-0.5 rounded-full bg-black/50 text-white text-xs">{{ item.area }}</span>
+          <div class="relative aspect-[4/3] overflow-hidden">
+            <img :src="item.image" :alt="item.title" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+            <span class="absolute left-3 top-3 px-2.5 py-1 rounded-full bg-black/45 backdrop-blur-sm text-white text-xs">{{ item.area }}</span>
+            <span class="absolute right-3 bottom-3 px-2.5 py-1 rounded-full bg-[#C8A96A]/95 text-[#2A2118] text-xs font-semibold">
+              ¥{{ fmtPrice(item.price) }} / 晚
+            </span>
           </div>
           <div class="p-4">
             <div class="flex items-start justify-between gap-2">
               <div class="font-semibold text-stone-800 truncate">{{ item.title }}</div>
-              <div class="shrink-0 flex items-center gap-1 text-amber-500 text-sm">
+              <div class="shrink-0 flex items-center gap-1 text-[#B8913F] text-sm">
                 <svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4"><path d="M11.48 3.5c.31-.64 1.27-.64 1.58 0l1.79 3.63 4 .58c.71.1.99.97.48 1.47l-2.89 2.82.68 3.98c.12.7-.62 1.24-1.25.9L12 14.62l-3.57 1.88c-.63.33-1.37-.2-1.25-.9l.68-3.98-2.89-2.82c-.51-.5-.23-1.37.48-1.47l4-.58 1.79-3.63z" /></svg>
                 {{ item.score }}
               </div>
             </div>
             <div class="mt-1 text-sm text-stone-500 truncate">{{ item.address }}</div>
-            <div class="mt-2 flex items-baseline justify-between">
-              <div class="text-emerald-700 text-lg font-bold">¥{{ fmtPrice(item.price) }} <span class="text-xs font-normal text-stone-400">/ 晚</span></div>
-              <span v-if="item.maxGuests" class="text-xs text-stone-500">可住 {{ item.maxGuests }} 人</span>
-            </div>
-            <div class="mt-2 flex flex-wrap gap-1.5">
+            <div class="mt-2.5 flex flex-wrap gap-1.5">
               <span v-for="(t, i) in item.tags.slice(0, 3)" :key="i" class="px-2 py-0.5 rounded-md bg-stone-100 text-stone-600 text-xs">{{ t }}</span>
+              <span v-if="item.maxGuests" class="px-2 py-0.5 rounded-md bg-stone-100 text-stone-600 text-xs">可住 {{ item.maxGuests }} 人</span>
             </div>
           </div>
         </div>
@@ -131,3 +125,17 @@ const groups = computed(() => {
     </template>
   </div>
 </template>
+
+<style scoped>
+/* 宋体栈：不引外部字体（国内网络环境），用系统衬线 */
+.font-serif-cn {
+  font-family: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+}
+
+/* hero 背景：竹林意象 + 墨绿渐变压暗 */
+.hero-bg {
+  background-image: url('https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1600&q=80');
+  background-size: cover;
+  background-position: center 40%;
+}
+</style>

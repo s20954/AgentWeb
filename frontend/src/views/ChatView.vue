@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import { webSearch } from '@/api/search'
 import ChatMessage from '@/components/ChatMessage.vue'
@@ -9,10 +9,19 @@ import VoiceInput from '@/components/VoiceInput.vue'
 import ImageSelect from '@/components/ImageSelect.vue'
 
 const router = useRouter()
+const route = useRoute()
 
 const store = useChatStore()
 const listEl = ref<HTMLElement | null>(null)
 const inputText = ref('')
+
+/** 首页 hero 搜索跳转带 ?q=：预填进输入框，用户确认后再发送。 */
+onMounted(() => {
+  const q = route.query.q
+  if (typeof q === 'string' && q.trim()) {
+    inputText.value = q.trim()
+  }
+})
 
 /** 联网搜索开关（输入框旁，DeepSeek 风格）。 */
 const webSearchOn = ref(false)
@@ -134,11 +143,11 @@ watch(() => store.messages.length, () => scrollToBottom())
           首页
         </button>
         <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-semibold">
-          民
+          栖
         </div>
         <div>
-          <h1 class="text-sm font-semibold text-stone-900 leading-tight">民宿预约 Agent</h1>
-          <p class="text-xs text-stone-500">你带来一句话，带走一个决断</p>
+          <h1 class="text-sm font-semibold text-stone-900 leading-tight">栖迟 Agent</h1>
+          <p class="text-xs text-stone-500">一语既出，佳宿自现</p>
         </div>
       </div>
       <div class="flex items-center gap-2">

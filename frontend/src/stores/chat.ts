@@ -96,7 +96,7 @@ export const useChatStore = defineStore('chat', () => {
    */
   function toMarkdown(): string {
     const lines: string[] = []
-    lines.push('# 民宿预约 Agent 对话记录')
+    lines.push('# 栖迟 Agent 对话记录')
     lines.push('')
     lines.push(`> 导出时间：${new Date().toLocaleString('zh-CN')}`)
     lines.push('')

@@ -48,7 +48,7 @@ const router = createRouter({
 // 路由标题
 router.afterEach((to) => {
   const title = to.meta.title as string | undefined
-  document.title = title ? `${title} · 民宿预约` : '民宿预约'
+  document.title = title ? `${title} · 栖迟` : '栖迟 Agent'
 })
 
 export default router

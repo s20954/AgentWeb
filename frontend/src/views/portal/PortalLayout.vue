@@ -41,8 +41,8 @@ function go(path: string): void {
       <div class="max-w-6xl mx-auto h-16 px-4 sm:px-6 flex items-center justify-between">
         <!-- Logo -->
         <button type="button" class="flex items-center gap-2" @click="go('/home')">
-          <span class="w-8 h-8 rounded-lg bg-emerald-700 flex items-center justify-center text-white font-semibold text-sm">民</span>
-          <span class="text-lg font-bold text-stone-800 tracking-wide">民宿预约</span>
+          <span class="w-8 h-8 rounded-lg bg-emerald-700 flex items-center justify-center text-white font-semibold text-sm">栖</span>
+          <span class="text-lg font-bold text-stone-800 tracking-wide">栖迟</span>
         </button>
 
         <!-- 桌面导航 -->
@@ -107,7 +107,7 @@ function go(path: string): void {
     <!-- 页脚 -->
     <footer class="border-t border-stone-200 bg-white">
       <div class="max-w-6xl mx-auto px-4 sm:px-6 py-8 text-center text-sm text-stone-500">
-        <p class="mb-1">民宿预约 Agent · 你带来一句话，带走一个决断</p>
+        <p class="mb-1">栖迟 Agent · 一语既出，佳宿自现</p>
       </div>
     </footer>
   </div>
