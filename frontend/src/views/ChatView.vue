@@ -46,11 +46,25 @@ async function doSearch(q: string): Promise<void> {
   store.messages.push({ id: agentId, role: 'agent', content: '', streaming: true, steps: [] })
   // 通过 store 内的响应式元素更新（直接改局部对象引用 Vue 检测不到）
   const agentMsg = () => store.messages.find((m) => m.id === agentId)!
-  agentMsg().steps = [{ type: 'LOADING_KNOWLEDGE', message: `先查本地知识库「${q}」…` }]
+  agentMsg().steps = [{ type: 'EXTRACTING', message: `理解需求「${q}」…` }]
 
   try {
-    const resp = await webSearch(q)
-    // 响应回来后，依次补「是否联网」「整合」两步，带小延时让过程可见
+    const resp = await webSearch(q, store.sessionId)
+
+    // 关键信息不全 → 后端在追问：展示「识别缺口 → 带着方案问」，然后输出问题
+    if (resp.needClarification) {
+      agentMsg().steps = [
+        ...agentMsg().steps!,
+        { type: 'GAP_FOUND', message: `识别到关键信息缺口：${(resp.missingFields || []).join('、')}` },
+      ]
+      await sleep(400)
+      agentMsg().steps = [...agentMsg().steps!, { type: 'ASKING', message: '信息不全，先向你确认，再出方案' }]
+      await sleep(400)
+      await typewriter(agentMsg, resp.answer || '需要补充一些信息。')
+      return
+    }
+
+    // 信息齐全 → 依次补「是否联网」「整合」两步，带小延时让过程可见
     agentMsg().steps = [
       ...agentMsg().steps!,
       { type: 'FILTERING', message: resp.primarySource === 'kb' ? '知识库已命中，无需联网' : '知识库未命中，转联网搜索…' },
@@ -68,18 +82,22 @@ async function doSearch(q: string): Promise<void> {
         content += `\n\n_来源：${resp.sources.join(' + ')}_`
       }
     }
-
-    // 3. 打字机式流式输出结果
-    const CHUNK = 12
-    for (let i = 0; i < content.length; i += CHUNK) {
-      agentMsg().content += content.slice(i, i + CHUNK)
-      await sleep(24)
-    }
+    await typewriter(agentMsg, content)
   } catch {
     agentMsg().content = '（智能检索请求失败，请稍后重试）'
   } finally {
     agentMsg().streaming = false
     searching.value = false
+  }
+}
+
+/** 打字机式流式输出：逐段把内容追加到指定消息。 */
+async function typewriter(agentMsg: () => { content: string }, content: string): Promise<void> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const CHUNK = 12
+  for (let i = 0; i < content.length; i += CHUNK) {
+    agentMsg().content += content.slice(i, i + CHUNK)
+    await sleep(24)
   }
 }
 

@@ -68,6 +68,29 @@ public class SearchController {
     /** 联网返回条数上限。 */
     private static final int WEB_MAX = 5;
 
+    /** 追问挂起的会话存活时间（10 分钟）。 */
+    private static final long CLARIFY_TTL_MS = 10 * 60 * 1000L;
+
+    /** 人数/同行人群线索（俩人、情侣、亲子、朋友、独自…）。 */
+    private static final Pattern PEOPLE_HINT = Pattern.compile(
+            "(俩|两|仨|四|五|六|七|八|九|十|\\d+)\\s*(人|位|口)|情侣|夫妻|爱人|对象|亲子|带娃|孩子|宝宝|朋友|闺蜜|兄弟|家人|家庭|父母|爸妈|独自|一个人|同事|同学|团建");
+    /** 行程天数线索（3天、两晚、周末、五一…）。 */
+    private static final Pattern DAYS_HINT = Pattern.compile(
+            "[一二三四五六七八九十\\d]+\\s*(天|晚|夜)|\\d+\\s*天\\s*\\d+\\s*晚|周末|小长假|五一|十一|国庆|春节|暑假|寒假");
+    /** 预算线索（预算xxx、每晚800、人均500…）。 */
+    private static final Pattern BUDGET_HINT = Pattern.compile(
+            "预算|\\d+\\s*(元|块|千|k|K)|每晚|人均");
+    /** 规划意图线索（「能带宠物吗」这类事实问答不触发缺口追问，直接答）。 */
+    private static final Pattern PLANNING_HINT = Pattern.compile(
+            "规划|计划|安排|攻略|行程|路线|怎么玩|去哪|游玩|旅游|度假");
+
+    /** 会话挂起：sessionId → 原始需求（等待用户补充关键信息）。 */
+    private final Map<String, PendingQuery> pendingClarifications = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 一次被挂起的需求：原始问题 + 过期时间。 */
+    private record PendingQuery(String originalQuery, long expireAt) {
+    }
+
     private final RagService ragService;
     private final LlmClient llmClient;
 
@@ -88,13 +111,35 @@ public class SearchController {
         if (query == null || query.isBlank()) {
             return Mono.just(Map.of("error", "PARAM_INVALID", "message", "缺少 query 参数"));
         }
+        // 会话 ID：用于「追问挂起 → 用户补充 → 合并规划」的多轮衔接
+        String sessionId = body == null || body.get("sessionId") == null
+                ? "default" : String.valueOf(body.get("sessionId"));
         final String q = query;
         // 联网抓取与 LLM 调用都是阻塞 IO，WebFlux 事件循环上 block() 会直接抛异常，
         // 整体移到 boundedElastic 线程执行（与 ChatController 的虚拟线程思路一致）
-        return Mono.fromCallable(() -> doSearch(q)).subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> doSearch(q, sessionId)).subscribeOn(Schedulers.boundedElastic());
     }
 
-    private Map<String, Object> doSearch(String query) {
+    private Map<String, Object> doSearch(String query, String sessionId) {
+
+        // ---- 第 0 步：若上一轮在等用户补充信息，把补充合并进原始需求 ----
+        query = mergePendingClarification(query, sessionId);
+
+        // ---- 缺口识别：规划类需求且关键信息不全时先追问，不急着规划（宁可问清楚，不瞎猜默认值）----
+        // 事实问答（能带宠物吗/门票多少）不走追问，直接检索回答
+        List<String> gaps = PLANNING_HINT.matcher(query).find() ? findGaps(query) : List.of();
+        if (!gaps.isEmpty()) {
+            pendingClarifications.put(sessionId,
+                    new PendingQuery(query, System.currentTimeMillis() + CLARIFY_TTL_MS));
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("query", query);
+            out.put("answer", buildClarifyQuestion(gaps));
+            out.put("sources", List.of("待补充信息"));
+            out.put("needClarification", true);
+            out.put("missingFields", gaps);
+            out.put("primarySource", "clarify");
+            return out;
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("query", query);
@@ -199,6 +244,59 @@ public class SearchController {
         out.put("sunkToKb", sunk);
 
         return out;
+    }
+
+    /**
+     * 若该会话上一轮在等用户补充信息，把本次输入合并进原始需求（并清除挂起）。
+     * 过期（10 分钟）则丢弃挂起，本次输入按新需求处理。
+     */
+    private String mergePendingClarification(String query, String sessionId) {
+        PendingQuery pending = pendingClarifications.remove(sessionId);
+        if (pending == null) {
+            return query;
+        }
+        if (pending.expireAt() < System.currentTimeMillis()) {
+            return query; // 已过期，按新需求处理
+        }
+        return pending.originalQuery() + "。补充信息：" + query;
+    }
+
+    /**
+     * 识别规划必需的关键信息缺口：人数/同行人、行程天数、（可选）预算、目的地。
+     * 返回缺口标签列表；为空表示信息齐全、可以直接规划。
+     */
+    private List<String> findGaps(String query) {
+        List<String> gaps = new ArrayList<>();
+        boolean hasDest = DESTINATIONS.stream().anyMatch(query::contains);
+        if (!hasDest) {
+            gaps.add("目的地");
+        }
+        if (!PEOPLE_HINT.matcher(query).find()) {
+            gaps.add("人数/同行人");
+        }
+        if (!DAYS_HINT.matcher(query).find()) {
+            gaps.add("行程天数");
+        }
+        // 预算只问不拦：缺预算不阻塞规划，仅在追问里顺带一问
+        return gaps;
+    }
+
+    /** 组装追问话术：只问缺失的项，预算作为可选项顺带提及。 */
+    private String buildClarifyQuestion(List<String> gaps) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("为了给你做一份能直接照着执行的规划，我还需要确认几个关键信息：\n");
+        int i = 1;
+        for (String gap : gaps) {
+            switch (gap) {
+                case "目的地" -> sb.append(i++).append(". **想去哪里？**（目的地城市/景区）\n");
+                case "人数/同行人" -> sb.append(i++).append(". **几个人去？和谁？**（情侣/朋友/家人/带娃…，住宿安排差别很大）\n");
+                case "行程天数" -> sb.append(i++).append(". **计划玩几天？** 大概什么时候出发？\n");
+                default -> { }
+            }
+        }
+        sb.append(i).append(". （可选）**预算**大概多少？比如每晚住宿上限或人均总预算。\n");
+        sb.append("\n回复我这些信息后，我马上给你出完整方案。");
+        return sb.toString();
     }
 
     /**
@@ -363,7 +461,8 @@ public class SearchController {
                 # 要求
                 - 语言自然、口语化、可直接读。
                 - 不要输出你的思考过程，直接输出方案本身。
-                - 若用户信息不全（没写日期/人数/预算），先按常见默认值规划并显式声明假设，不要反过来追问一堆问题。
+                - 关键信息（目的地/人数/天数）已在追问环节与用户确认，直接按确认的信息规划；
+                  若仍有个别细节缺失（如具体预算），按最常见情况处理并一句话说明假设，不要再反问。
                 """;
 
         try {
