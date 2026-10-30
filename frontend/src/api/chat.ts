@@ -29,14 +29,22 @@ export async function streamChat(
   sessionId: string,
   handlers: StreamHandlers,
 ): Promise<void> {
-  const res = await fetch('/api/chat/stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-User-Id': sessionId,
-    },
-    body: JSON.stringify({ message, sessionId }),
-  })
+  // fetch 本身必须包进 try：后端重启/代理断开时 fetch 直接 reject，
+  // 不捕获会绕过 onError 让调用方陷入永久 loading（界面卡死、控制台报 net::ERR_ABORTED）
+  let res: Response
+  try {
+    res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': sessionId,
+      },
+      body: JSON.stringify({ message, sessionId }),
+    })
+  } catch (e) {
+    handlers.onError?.(e instanceof Error ? e.message : String(e))
+    return
+  }
 
   if (!res.ok || !res.body) {
     handlers.onError?.(`请求失败：HTTP ${res.status}`)
