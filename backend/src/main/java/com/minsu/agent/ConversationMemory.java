@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -35,6 +36,11 @@ public class ConversationMemory {
     private static final int MAX_TURNS = 10;
     /** 会话不活跃多久后丢弃历史（30 分钟）。 */
     private static final long TTL_MS = 30 * 60 * 1000L;
+    /**
+     * 会话条目上限。前端每次刷新页面都会生成新 sessionId，过期条目只有被再次访问才会清理，
+     * 旧 sessionId 永远不会再被访问 → 不主动清扫会无界堆积，故设上限兜底。
+     */
+    private static final int MAX_SESSIONS = 1000;
 
     private static class SessionHistory {
         final Deque<LlmMessage> messages = new ArrayDeque<>();
@@ -67,6 +73,7 @@ public class ConversationMemory {
                 || assistantMessage == null || assistantMessage.isBlank()) {
             return;
         }
+        evictIfNeeded();
         SessionHistory h = sessions.computeIfAbsent(sessionId, k -> new SessionHistory());
         synchronized (h) {
             if (expired(h)) {
@@ -84,6 +91,23 @@ public class ConversationMemory {
     /** 清空指定会话历史（前端重置会话时调用）。 */
     public void clear(String sessionId) {
         sessions.remove(sessionId);
+    }
+
+    /** 条目数超上限时：先清过期会话，仍超限再按最后活跃时间从最旧的开始删。 */
+    private void evictIfNeeded() {
+        if (sessions.size() <= MAX_SESSIONS) {
+            return;
+        }
+        sessions.entrySet().removeIf(e -> expired(e.getValue()));
+        while (sessions.size() > MAX_SESSIONS) {
+            String oldest = sessions.entrySet().stream()
+                    .min((a, b) -> Long.compare(a.getValue().lastTouch, b.getValue().lastTouch))
+                    .map(Map.Entry::getKey).orElse(null);
+            if (oldest == null) {
+                break;
+            }
+            sessions.remove(oldest);
+        }
     }
 
     private boolean expired(SessionHistory h) {

@@ -412,10 +412,49 @@ public class SearchController {
         if (content.length() == 0) {
             return false;
         }
+        // 相关性校验：必应经常对口语化/指代类查询返回完全无关的结果（字典释义、股票行情…），
+        // 不校验就沉淀会把垃圾写进知识库污染后续检索（实测出现过「成都游玩」沉淀出股票行情）。
+        if (!isWebContentRelevant(query, content.toString())) {
+            log.info("联网结果与问题不相关，跳过沉淀：query={}", query);
+            return false;
+        }
         // 加上问题上下文，便于下次相似问句能检索到
         String kbContent = "关于「" + query + "」：联网了解到——" + content;
         String newId = ragService.addKnowledge("联网沉淀", kbContent);
         return newId != null;
+    }
+
+    /**
+     * 校验联网内容是否与问题相关（沉淀前的防污染闸门）。
+     *
+     * <p>规则：问题里含白名单目的地时，要求联网内容至少提到该目的地；
+     * 无目的地（多为「那带小孩的呢」这类依赖上下文的追问）时，要求问题中任一 ≥2 字的内容词
+     * 出现在联网内容里。都不满足视为无关。
+     */
+    private boolean isWebContentRelevant(String query, String webContent) {
+        if (webContent == null || webContent.isBlank()) {
+            return false;
+        }
+        for (String d : DESTINATIONS) {
+            if (query.contains(d)) {
+                return webContent.contains(d);
+            }
+        }
+        // 无目的地：取问题中 ≥2 字的连续中文段（去掉通用词），任一命中即算相关
+        for (String seg : query.split("[^\\u4e00-\\u9fa5]+")) {
+            if (seg.length() < 2) {
+                continue;
+            }
+            for (String generic : List.of("旅游", "攻略", "怎么", "如何", "推荐", "一下", "帮我", "我想", "我要")) {
+                seg = seg.replace(generic, " ");
+            }
+            for (String token : seg.split("\\s+")) {
+                if (token.length() >= 2 && webContent.contains(token)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
