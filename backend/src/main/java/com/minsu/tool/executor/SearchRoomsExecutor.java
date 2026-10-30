@@ -56,6 +56,7 @@ public class SearchRoomsExecutor extends AbstractToolExecutor {
             m.put("style", r.style());
             m.put("fitReason", r.fitReason());
             m.put("drawback", r.drawback());
+            m.put("cover", r.cover());
             list.add(m);
         }
 

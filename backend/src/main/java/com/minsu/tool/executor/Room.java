@@ -12,6 +12,7 @@ public record Room(
         int basePrice,
         String style,
         String fitReason,
-        String drawback
+        String drawback,
+        String cover
 ) {
 }

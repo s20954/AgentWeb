@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { marked, Renderer, type Tokens } from 'marked'
 import type { ChatMessage } from '@/types/chat'
 import ThinkingChain from './ThinkingChain.vue'
+import RoomCards from './RoomCards.vue'
 
 const props = defineProps<{
   message: ChatMessage
@@ -66,6 +67,8 @@ const rendered = computed(() => {
       <div v-else class="space-y-3">
         <ThinkingChain v-if="message.steps && message.steps.length" :steps="message.steps" />
 
+        <RoomCards v-if="message.cards && message.cards.length" :cards="message.cards" :booking="message.booking" />
+
         <div
           v-if="message.content"
           class="rounded-2xl rounded-bl-sm bg-white border border-stone-200 px-4 py-3 text-sm text-stone-800 shadow-sm"
@@ -93,6 +96,10 @@ const rendered = computed(() => {
 
 <!-- Markdown 排版（scoped 无法命中 v-html，用 :deep） -->
 <style scoped>
+.md-body {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 .md-body :deep(h1),
 .md-body :deep(h2),
 .md-body :deep(h3),

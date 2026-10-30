@@ -20,6 +20,15 @@ function goAgent(q?: string): void {
 /** 快捷意象词条：一键带词进入对话。 */
 const heroChips = ['莫干山 · 竹海私汤', '成都 · 亲子院落', '大理 · 临海白桌', '带宠物入住']
 
+/** 页面底部信息区：快速访问导航。 */
+const quickLinks = [
+  { to: '/home', label: '首页' },
+  { to: '/homestay', label: '民宿' },
+  { to: '/spot', label: '景点' },
+  { to: '/agent', label: 'AI 助手' },
+  { to: '/order', label: '我的订单' },
+]
+
 function goDetail(h: Homestay): void {
   router.push(`/homestay/${h.homestayId}`)
 }
@@ -123,6 +132,53 @@ const groups = computed(() => {
         </div>
       </div>
     </template>
+
+    <!-- 关于项目：浅色通栏信息区（铺满浏览器 100% 宽度） -->
+    <section class="mt-14 bg-[#EDEAE3] text-stone-700 overflow-hidden w-screen relative left-1/2 -translate-x-1/2">
+      <div class="max-w-6xl mx-auto px-4 sm:px-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 py-12 sm:py-14">
+          <!-- 关于项目 -->
+          <div>
+            <h4 class="font-serif-cn text-lg font-semibold text-emerald-800 tracking-wider mb-3">关于项目</h4>
+            <p class="text-sm leading-6 text-stone-600">
+              栖迟 Agent 是一款 AI 驱动的民宿预订平台，支持联网搜索、需求缺口追问、看图选房与语音输入。一句话需求，即可为你收敛出一个可决策的住宿方案。
+            </p>
+          </div>
+
+          <!-- 技术支持 -->
+          <div>
+            <h4 class="font-serif-cn text-lg font-semibold text-emerald-800 tracking-wider mb-3">技术支持</h4>
+            <ul class="text-sm leading-7 text-stone-600">
+              <li>前端 · Vue 3 / TypeScript / Tailwind</li>
+              <li>后端 · Spring Boot / MyBatis-Plus</li>
+              <li>数据 · MySQL / 本地知识库</li>
+              <li>AI · DeepSeek LLM + 视觉模型</li>
+            </ul>
+          </div>
+
+          <!-- 快速访问 -->
+          <div>
+            <h4 class="font-serif-cn text-lg font-semibold text-emerald-800 tracking-wider mb-3">快速访问</h4>
+            <ul class="text-sm leading-7">
+              <li v-for="n in quickLinks" :key="n.to">
+                <a class="text-stone-600 hover:text-emerald-800 transition-colors cursor-pointer" @click="router.push(n.to)">{{ n.label }}</a>
+              </li>
+            </ul>
+          </div>
+
+          <!-- 联系方式 -->
+          <div>
+            <h4 class="font-serif-cn text-lg font-semibold text-emerald-800 tracking-wider mb-3">联系方式</h4>
+            <ul class="text-sm leading-7 text-stone-600">
+              <li>GitHub · s20954 / AgentWeb</li>
+              <li>
+                <a class="hover:text-emerald-800 transition-colors cursor-pointer" @click="router.push('/agent')">意见反馈 · 通过 AI 助手留言</a>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 

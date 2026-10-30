@@ -128,7 +128,7 @@ watch(() => store.messages.length, () => scrollToBottom())
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-stone-50">
+  <div class="h-dvh flex flex-col bg-stone-50">
     <!-- 顶栏 -->
     <header class="shrink-0 border-b border-stone-200 bg-white px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-3">
@@ -147,7 +147,7 @@ watch(() => store.messages.length, () => scrollToBottom())
         </div>
         <div>
           <h1 class="text-sm font-semibold text-stone-900 leading-tight">栖迟 Agent</h1>
-          <p class="text-xs text-stone-500">一语既出，佳宿自现</p>
+          <p class="hidden sm:block text-xs text-stone-500">一语既出，佳宿自现</p>
         </div>
       </div>
       <div class="flex items-center gap-2">

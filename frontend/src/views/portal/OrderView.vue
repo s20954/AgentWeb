@@ -82,7 +82,7 @@ function review(order: Order): void {
               {{ order.checkInDate }} 至 {{ order.checkOutDate }} · {{ order.nights }} 晚
             </div>
             <div class="mt-1 text-sm text-stone-500">联系电话：{{ order.contactPhone }}</div>
-            <div class="mt-2 flex items-center justify-between">
+            <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
               <span class="text-emerald-700 font-bold">¥{{ order.totalPrice }}</span>
               <div class="flex gap-2">
                 <button v-if="order.status === '待支付'" type="button" class="px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-sm hover:bg-emerald-800" @click="pay(order)">支付</button>

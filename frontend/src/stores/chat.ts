@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { streamChat } from '@/api/chat'
-import type { ChatMessage, StepEvent } from '@/types/chat'
+import type { ChatMessage, RoomCard, StepEvent } from '@/types/chat'
 
 let idCounter = 0
 function nextId(): string {
@@ -61,6 +61,17 @@ export const useChatStore = defineStore('chat', () => {
         }
         // 同步到 Agent 消息的 steps
         agentMsg().steps = [...activeSteps.value]
+
+        // DECIDING 步骤携带结构化房源 payload → 存到消息上，供卡片式多方案对比渲染
+        if (event.type === 'DECIDING' && event.payload) {
+          const p = event.payload as { rooms?: RoomCard[]; checkIn?: string; checkOut?: string; guests?: number }
+          if (Array.isArray(p.rooms)) {
+            agentMsg().cards = p.rooms
+          }
+          if (p.checkIn && p.checkOut) {
+            agentMsg().booking = { checkIn: p.checkIn, checkOut: p.checkOut, guests: p.guests ?? 2 }
+          }
+        }
       },
       onText: (chunk) => {
         agentMsg().content += chunk

@@ -112,7 +112,8 @@ public class AgentService {
         sink.step(StepEvent.of(StepEventType.PACKAGING, "组织推荐方案…"));
 
         // ---- 第 7 步：逼出决策（LLM 生成最终话术，硬约束由代码保证）----
-        sink.step(StepEvent.of(StepEventType.DECIDING, "给出最终建议…"));
+        // 结构化房源随 DECIDING 步骤的 payload 推给前端，前端据此渲染房源卡片（多方案对比）
+        sink.step(StepEvent.of(StepEventType.DECIDING, "给出最终建议…", buildRoomsPayload(state)));
         String finalAnswer = generateFinalAnswer(state, history);
 
         sink.text(finalAnswer);
@@ -336,6 +337,39 @@ public class AgentService {
         return rooms == null ? List.of() : rooms;
     }
 
+    /** 组装结构化房源 payload：把候选打包成前端可直接渲染的卡片数据（含主推）。 */
+    private Map<String, Object> buildRoomsPayload(AgentState state) {
+        List<Map<String, Object>> candidates = state.getCandidates();
+        if (candidates == null || candidates.isEmpty()) {
+            return Map.of("rooms", List.of(), "count", 0, "recommendedId", "");
+        }
+        int show = Math.min(3, candidates.size());
+        List<Map<String, Object>> rooms = new ArrayList<>(show);
+        for (int i = 0; i < show; i++) {
+            Map<String, Object> c = candidates.get(i);
+            Map<String, Object> room = new LinkedHashMap<>();
+            room.put("roomId", c.get("roomId"));
+            room.put("area", c.get("area"));
+            room.put("title", c.get("title"));
+            room.put("positioning", c.get("positioning"));
+            room.put("basePrice", c.get("basePrice"));
+            room.put("style", c.get("style"));
+            room.put("fitReason", c.get("fitReason"));
+            room.put("drawback", c.get("drawback"));
+            room.put("cover", c.get("cover"));
+            rooms.add(room);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("rooms", rooms);
+        payload.put("count", candidates.size());
+        payload.put("recommendedId", candidates.get(0).get("roomId"));
+        // 供前端「帮我报价」按钮调用 quote_price 使用（报价需 roomId + 入住/离店日期）
+        payload.put("checkIn", state.getCheckIn());
+        payload.put("checkOut", state.getCheckOut());
+        payload.put("guests", state.getGuests());
+        return payload;
+    }
+
     /** 第 7 步：逼出决策（硬约束由代码组装，LLM 润色话术）。 */
     private String generateFinalAnswer(AgentState state, List<LlmMessage> history) {
         List<Map<String, Object>> candidates = state.getCandidates();
@@ -377,6 +411,9 @@ public class AgentService {
             List<LlmMessage> messages = new ArrayList<>();
             messages.add(LlmMessage.system("你是民宿预约顾问。请把下面的推荐润色得自然、有温度，"
                     + "但必须保留所有候选、主推、缺点、下一步动作等信息，不要增删房源事实。"
+                    + "本作品紧扣「健康/康养」主题：当用户关注健康、康养、带老人、静养、恢复、徒步放松等需求时，"
+                    + "突出每套房的健康友好要素（是否安静、空气质量、有无温泉/私汤、是否适合散步徒步、离镇远近），"
+                    + "并在适配理由里显式点明这套房对健康的友好之处。"
                     + "你与用户正在进行连续对话，对话历史附在下方：润色时带上上下文，"
                     + "用户之前的提问与你之前的回答都是背景，语气上体现「我记得我们刚才聊的内容」。"));
             messages.addAll(history);

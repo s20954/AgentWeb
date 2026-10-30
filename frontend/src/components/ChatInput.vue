@@ -46,7 +46,7 @@ function submit(): void {
           <circle cx="12" cy="12" r="9" />
           <path stroke-linecap="round" d="M3 12h18M12 3c2.5 2.67 3.75 5.5 3.75 9S14.5 18.33 12 21c-2.5-2.67-3.75-5.5-3.75-9S9.5 5.67 12 3z" />
         </svg>
-        <span>联网搜索</span>
+        <span class="hidden sm:inline">联网搜索</span>
       </button>
 
       <textarea
