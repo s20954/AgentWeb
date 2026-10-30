@@ -6,11 +6,19 @@ import { homestayList, type Homestay } from '@/mock/data'
 const router = useRouter()
 const keyword = ref('')
 const activeTag = ref<string>('')
+const activeArea = ref<string>('')
 
 // 全部可选标签（去重）
 const allTags = computed(() => {
   const set = new Set<string>()
   homestayList.forEach((h) => h.tags.forEach((t) => set.add(t)))
+  return Array.from(set)
+})
+
+// 全部可选地区（去重）
+const allAreas = computed(() => {
+  const set = new Set<string>()
+  homestayList.forEach((h) => set.add(h.area))
   return Array.from(set)
 })
 
@@ -20,7 +28,8 @@ const filtered = computed(() => {
     const kw = keyword.value.trim()
     const matchKw = !kw || h.title.includes(kw) || h.address.includes(kw) || h.area.includes(kw)
     const matchTag = !activeTag.value || h.tags.includes(activeTag.value)
-    return matchKw && matchTag
+    const matchArea = !activeArea.value || h.area === activeArea.value
+    return matchKw && matchTag && matchArea
   })
 })
 
@@ -44,6 +53,28 @@ function goDetail(h: Homestay): void {
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
         </svg>
       </div>
+    </div>
+
+    <!-- 地区筛选 -->
+    <div class="flex flex-wrap gap-2 mb-3">
+      <button
+        type="button"
+        class="px-3 py-1.5 rounded-full text-sm transition-colors"
+        :class="!activeArea ? 'bg-emerald-700 text-white' : 'bg-white text-stone-600 border border-stone-200 hover:border-emerald-300'"
+        @click="activeArea = ''"
+      >
+        全部地区
+      </button>
+      <button
+        v-for="a in allAreas"
+        :key="a"
+        type="button"
+        class="px-3 py-1.5 rounded-full text-sm transition-colors"
+        :class="activeArea === a ? 'bg-emerald-700 text-white' : 'bg-white text-stone-600 border border-stone-200 hover:border-emerald-300'"
+        @click="activeArea = a"
+      >
+        {{ a }}
+      </button>
     </div>
 
     <!-- 标签筛选 -->
