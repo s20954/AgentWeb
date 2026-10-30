@@ -26,9 +26,6 @@ public class AgentState {
     // ---- 候选房源（第 5 步）----
     private List<Map<String, Object>> candidates = new ArrayList<>();
 
-    // ---- 用户已确认的补充信息（多轮）----
-    private final List<String> history = new ArrayList<>();
-
     public String getDestination() { return destination; }
     public void setDestination(String destination) { this.destination = destination; }
     public String getCheckIn() { return checkIn; }
@@ -47,7 +44,6 @@ public class AgentState {
     public List<String> getGaps() { return gaps; }
     public List<Map<String, Object>> getCandidates() { return candidates; }
     public void setCandidates(List<Map<String, Object>> candidates) { this.candidates = candidates; }
-    public List<String> getHistory() { return history; }
 
     /** 是否已具备「必问三要素」（日期/预算/关系）。 */
     public boolean hasMandatoryInfo() {

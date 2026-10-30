@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.minsu.agent.ConversationMemory;
 import com.minsu.agent.llm.LlmClient;
 import com.minsu.agent.llm.LlmMessage;
 import com.minsu.rag.RagService;
@@ -93,10 +94,12 @@ public class SearchController {
 
     private final RagService ragService;
     private final LlmClient llmClient;
+    private final ConversationMemory conversationMemory;
 
-    public SearchController(RagService ragService, LlmClient llmClient) {
+    public SearchController(RagService ragService, LlmClient llmClient, ConversationMemory conversationMemory) {
         this.ragService = ragService;
         this.llmClient = llmClient;
+        this.conversationMemory = conversationMemory;
     }
 
     /**
@@ -122,6 +125,11 @@ public class SearchController {
 
     private Map<String, Object> doSearch(String query, String sessionId) {
 
+        // 用户本轮的原始输入（用于写入对话记忆；query 可能被追问合并改写，不改写记忆里的原文）
+        final String rawQuery = query;
+        // ---- 对话记忆：取出本会话之前的问答历史，让本轮回答带着上下文（不再每句从零开始）----
+        final List<LlmMessage> history = conversationMemory.recent(sessionId);
+
         // ---- 第 0 步：若上一轮在等用户补充信息，把补充合并进原始需求 ----
         query = mergePendingClarification(query, sessionId);
 
@@ -133,11 +141,14 @@ public class SearchController {
                     new PendingQuery(query, System.currentTimeMillis() + CLARIFY_TTL_MS));
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("query", query);
-            out.put("answer", buildClarifyQuestion(gaps));
+            String clarifyAnswer = buildClarifyQuestion(gaps);
+            out.put("answer", clarifyAnswer);
             out.put("sources", List.of("待补充信息"));
             out.put("needClarification", true);
             out.put("missingFields", gaps);
             out.put("primarySource", "clarify");
+            // 追问也是一轮对话，记入记忆——后续回答要知道「我之前问过什么」
+            conversationMemory.appendTurn(sessionId, rawQuery, clarifyAnswer);
             return out;
         }
 
@@ -222,7 +233,7 @@ public class SearchController {
         String answer;
         boolean llmPlanned = false; // 本次是否真正由 LLM 产出了规划（决定后续是否允许沉淀）
         if (llmClient.isConfigured()) {
-            String planned = planWithLlm(query, kbHit, kbResults, webAnswer, webResults, sources);
+            String planned = planWithLlm(query, kbHit, kbResults, webAnswer, webResults, sources, history);
             if (planned != null) {
                 answer = planned;
                 llmPlanned = true;
@@ -242,6 +253,9 @@ public class SearchController {
         // 只有「LLM 规划成功」才沉淀，降级拼接的原始搜索结果（可能含百科/字典类噪音）不沉淀，避免污染知识库。
         boolean sunk = llmPlanned && sinkToKnowledgeBase(query, kbHit, webAnswer, webResults);
         out.put("sunkToKb", sunk);
+
+        // ---- 第 5 步：本轮问答写入对话记忆，供下一轮延续上下文 ----
+        conversationMemory.appendTurn(sessionId, rawQuery, answer);
 
         return out;
     }
@@ -411,10 +425,13 @@ public class SearchController {
      * 而是让 LLM 基于真实搜索到的内容自主思考、整理、规划，交付一份可直接使用的方案。
      *
      * <p>返回 {@code null} 表示规划失败（LLM 调用异常或返回为空），由调用方降级到字符串拼接。
+     *
+     * @param history 本会话之前的问答历史（user/assistant 交替），拼在 system 之后、当前需求之前，
+     *                让本轮回答记得「用户之前问过什么、我之前答过什么」
      */
     private String planWithLlm(String query, boolean kbHit, List<Map<String, Object>> kbResults,
                                String webAnswer, List<Map<String, Object>> webResults,
-                               List<String> sources) {
+                               List<String> sources, List<LlmMessage> history) {
         // 组装素材
         StringBuilder material = new StringBuilder();
         if (kbHit && !kbResults.isEmpty()) {
@@ -461,14 +478,18 @@ public class SearchController {
                 # 要求
                 - 语言自然、口语化、可直接读。
                 - 不要输出你的思考过程，直接输出方案本身。
+                - 你正在和用户进行一场连续对话，对话历史附在下方。请带着历史回答：
+                  用户之前问过什么、你之前答过什么（包括之前没答上来的），都是本轮回答的上下文；
+                  用户说「那里/它/刚才说的」这类指代时，从历史中还原所指，不要把本轮当成孤立的新问题。
                 - 关键信息（目的地/人数/天数）已在追问环节与用户确认，直接按确认的信息规划；
                   若仍有个别细节缺失（如具体预算），按最常见情况处理并一句话说明假设，不要再反问。
                 """;
 
         try {
-            List<LlmMessage> messages = List.of(
-                    LlmMessage.system(systemPrompt),
-                    LlmMessage.user("我的需求：" + query + "\n\n以下是可供规划参考的素材：\n" + material));
+            List<LlmMessage> messages = new ArrayList<>();
+            messages.add(LlmMessage.system(systemPrompt));
+            messages.addAll(history);
+            messages.add(LlmMessage.user("我的需求：" + query + "\n\n以下是可供规划参考的素材：\n" + material));
             LlmClient.LlmResponse resp = llmClient.chat(messages, List.of());
             if (resp != null && resp.content() != null && !resp.content().isBlank()) {
                 sources.add("AI 规划整理");

@@ -47,7 +47,7 @@ class AgentServiceTest {
                 return false;
             }
         };
-        agentService = new AgentService(dispatcher, noopLlm);
+        agentService = new AgentService(dispatcher, noopLlm, new ConversationMemory());
         steps = new ArrayList<>();
         texts = new ArrayList<>();
     }

@@ -34,13 +34,15 @@ public class AgentService {
 
     private final ToolDispatcher toolDispatcher;
     private final LlmClient llmClient;
+    private final ConversationMemory conversationMemory;
 
     /** 会话级状态缓存（sessionId -> AgentState），支撑多轮收敛。 */
     private final ConcurrentMap<String, AgentState> sessions = new ConcurrentHashMap<>();
 
-    public AgentService(ToolDispatcher toolDispatcher, LlmClient llmClient) {
+    public AgentService(ToolDispatcher toolDispatcher, LlmClient llmClient, ConversationMemory conversationMemory) {
         this.toolDispatcher = toolDispatcher;
         this.llmClient = llmClient;
+        this.conversationMemory = conversationMemory;
     }
 
     /** 思考链/文本事件回调。 */
@@ -63,6 +65,8 @@ public class AgentService {
     public String run(String sessionId, String userInput, EventSink sink) {
         // 取旧会话状态（多轮累积），无则新建
         AgentState state = sessions.computeIfAbsent(sessionId, k -> new AgentState());
+        // 对话记忆：本会话之前的问答历史，供最终话术生成时带上上下文
+        List<LlmMessage> history = conversationMemory.recent(sessionId);
 
         // ---- 第 1 步：实体抽取（合并到旧状态，非空才覆盖，已填的保留）----
         sink.step(StepEvent.of(StepEventType.EXTRACTING, "正在理解你的需求…"));
@@ -78,7 +82,10 @@ public class AgentService {
         // 若缺必问三要素 → 第 3 步带着方案问，本轮终止（不筛选）
         if (!state.getGaps().isEmpty()) {
             sink.step(StepEvent.of(StepEventType.GAP_FOUND, summarizeGaps(state)));
-            return askWithOptions(sink, state);
+            String askAnswer = askWithOptions(sink, state);
+            // 追问也是一轮对话，记入记忆
+            conversationMemory.appendTurn(sessionId, userInput, askAnswer);
+            return askAnswer;
         }
 
         // ---- 第 4 步：调用地域知识 ----
@@ -98,9 +105,11 @@ public class AgentService {
 
         // ---- 第 7 步：逼出决策（LLM 生成最终话术，硬约束由代码保证）----
         sink.step(StepEvent.of(StepEventType.DECIDING, "给出最终建议…"));
-        String finalAnswer = generateFinalAnswer(state);
+        String finalAnswer = generateFinalAnswer(state, history);
 
         sink.text(finalAnswer);
+        // 本轮问答写入对话记忆，供下一轮延续上下文
+        conversationMemory.appendTurn(sessionId, userInput, finalAnswer);
         return finalAnswer;
     }
 
@@ -298,7 +307,7 @@ public class AgentService {
     }
 
     /** 第 7 步：逼出决策（硬约束由代码组装，LLM 润色话术）。 */
-    private String generateFinalAnswer(AgentState state) {
+    private String generateFinalAnswer(AgentState state, List<LlmMessage> history) {
         List<Map<String, Object>> candidates = state.getCandidates();
         if (candidates.isEmpty()) {
             return "当前条件下没有找到匹配房源，建议放宽预算或日期后我再帮你筛。";
@@ -326,19 +335,22 @@ public class AgentService {
 
         String template = sb.toString();
         // 已配置 LLM 时润色话术（不改变候选与硬约束信息），失败则回退模板
-        return polishWithLlm(state, template);
+        return polishWithLlm(state, template, history);
     }
 
     /** 用 LLM 润色最终话术（未配置或异常时回退模板，保证硬约束不丢）。 */
-    private String polishWithLlm(AgentState state, String template) {
+    private String polishWithLlm(AgentState state, String template, List<LlmMessage> history) {
         if (!llmClient.isConfigured()) {
             return template;
         }
         try {
-            List<LlmMessage> messages = List.of(
-                    LlmMessage.system("你是民宿预约顾问。请把下面的推荐润色得自然、有温度，"
-                            + "但必须保留所有候选、主推、缺点、下一步动作等信息，不要增删房源事实。"),
-                    LlmMessage.user(template));
+            List<LlmMessage> messages = new ArrayList<>();
+            messages.add(LlmMessage.system("你是民宿预约顾问。请把下面的推荐润色得自然、有温度，"
+                    + "但必须保留所有候选、主推、缺点、下一步动作等信息，不要增删房源事实。"
+                    + "你与用户正在进行连续对话，对话历史附在下方：润色时带上上下文，"
+                    + "用户之前的提问与你之前的回答都是背景，语气上体现「我记得我们刚才聊的内容」。"));
+            messages.addAll(history);
+            messages.add(LlmMessage.user(template));
             LlmClient.LlmResponse resp = llmClient.chat(messages, List.of());
             if (resp != null && resp.content() != null && !resp.content().isBlank()) {
                 return resp.content();
