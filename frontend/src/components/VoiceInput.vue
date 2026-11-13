@@ -81,7 +81,7 @@ onBeforeUnmount(() => {
       listening
         ? 'bg-red-50 border-red-300 text-red-600'
         : supported
-          ? 'bg-white border-stone-200 text-stone-500 hover:border-indigo-300 hover:text-indigo-600'
+          ? 'bg-white border-stone-200 text-stone-500 hover:border-emerald-300 hover:text-emerald-700'
           : 'bg-stone-50 border-stone-200 text-stone-300 cursor-not-allowed'
     "
     @click="toggle"

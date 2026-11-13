@@ -2,13 +2,14 @@
  * 对话相关类型 —— 对齐后端 /api/chat/stream 的 SSE 事件协议。
  */
 
-/** 思考链步骤类型（对齐后端 StepEventType 的七步收敛）。 */
+/** 思考链步骤类型（对齐后端 StepEventType 的七步收敛 + LLM 自主工具调用）。 */
 export type StepType =
   | 'EXTRACTING'
   | 'GAP_FOUND'
   | 'ASKING'
   | 'LOADING_KNOWLEDGE'
   | 'FILTERING'
+  | 'TOOL_CALLING'
   | 'PACKAGING'
   | 'DECIDING'
 

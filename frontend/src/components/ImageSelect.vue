@@ -99,7 +99,7 @@ function buildSummary(data: any): string {
     <button
       type="button"
       :disabled="loading"
-      class="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs text-stone-500 hover:border-indigo-300 hover:text-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      class="inline-flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs text-stone-500 hover:border-emerald-300 hover:text-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       @click="pick"
     >
       <svg
@@ -121,7 +121,7 @@ function buildSummary(data: any): string {
 
     <!-- 可解释的中间展示 -->
     <div v-if="result || error" class="text-xs leading-5">
-      <p v-if="result" class="text-indigo-600">{{ result }}</p>
+      <p v-if="result" class="text-emerald-700">{{ result }}</p>
       <p v-if="error" class="text-red-500">识别失败：{{ error }}</p>
     </div>
   </div>

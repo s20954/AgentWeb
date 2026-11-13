@@ -134,7 +134,7 @@ watch(() => store.messages.length, () => scrollToBottom())
       <div class="flex items-center gap-3">
         <button
           type="button"
-          class="flex items-center gap-1 text-xs text-stone-500 hover:text-indigo-600 transition-colors"
+          class="flex items-center gap-1 text-xs text-stone-500 hover:text-emerald-700 transition-colors"
           @click="router.push('/home')"
         >
           <svg viewBox="0 0 24 24" fill="none" class="w-4 h-4" stroke="currentColor" stroke-width="1.5">
@@ -142,7 +142,7 @@ watch(() => store.messages.length, () => scrollToBottom())
           </svg>
           首页
         </button>
-        <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-semibold">
+        <div class="w-8 h-8 rounded-lg bg-emerald-700 flex items-center justify-center text-white font-semibold">
           栖
         </div>
         <div>
@@ -153,7 +153,7 @@ watch(() => store.messages.length, () => scrollToBottom())
       <div class="flex items-center gap-2">
         <button
           type="button"
-          class="text-xs text-stone-400 hover:text-indigo-600 transition-colors"
+          class="text-xs text-stone-400 hover:text-emerald-700 transition-colors"
           @click="store.exportMarkdown()"
         >
           导出对话
@@ -172,7 +172,7 @@ watch(() => store.messages.length, () => scrollToBottom())
     <main ref="listEl" class="flex-1 overflow-y-auto px-4 py-4 space-y-4">
       <!-- 空态引导 -->
       <div v-if="store.messages.length === 0" class="h-full flex flex-col items-center justify-center text-center">
-        <div class="w-14 h-14 rounded-2xl bg-indigo-100 flex items-center justify-center text-indigo-600 mb-4">
+        <div class="w-14 h-14 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-700 mb-4">
           <svg viewBox="0 0 24 24" fill="none" class="w-7 h-7" stroke="currentColor" stroke-width="1.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 21v-4.875c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125V21m0 0h4.5V3.545M12.75 21h7.5V10.75M2.25 21h1.5m18 0h-18M2.25 9l4.5-1.636M18.75 3l-1.5.545m0 6.205 3 1m1.5.5-1.5-.5M6.75 7.364V3h-3v18m3-13.636 10.5-3.819" />
           </svg>
@@ -186,7 +186,7 @@ watch(() => store.messages.length, () => scrollToBottom())
             v-for="q in ['莫干山，11月1日到3日，预算每晚800，情侣', '带孩子去莫干山亲子游，预算1000']"
             :key="q"
             type="button"
-            class="px-3 py-1.5 rounded-full border border-stone-200 bg-white text-xs text-stone-600 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+            class="px-3 py-1.5 rounded-full border border-stone-200 bg-white text-xs text-stone-600 hover:border-emerald-300 hover:text-emerald-700 transition-colors"
             @click="store.send(q)"
           >
             {{ q }}

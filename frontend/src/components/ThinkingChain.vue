@@ -13,6 +13,7 @@ const STEP_ORDER: { type: StepType; label: string }[] = [
   { type: 'ASKING', label: '带着方案问' },
   { type: 'LOADING_KNOWLEDGE', label: '加载片区知识' },
   { type: 'FILTERING', label: '筛选房源' },
+  { type: 'TOOL_CALLING', label: '调用工具' },
   { type: 'PACKAGING', label: '包装方案' },
   { type: 'DECIDING', label: '给出建议' },
 ]
@@ -43,9 +44,9 @@ function labelOf(type: StepType): string {
 </script>
 
 <template>
-  <div class="thinking-chain rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
-    <div class="flex items-center gap-2 text-xs font-medium text-indigo-600">
-      <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-100 text-indigo-600">
+  <div class="thinking-chain rounded-xl border border-emerald-100 bg-emerald-50/50 p-4">
+    <div class="flex items-center gap-2 text-xs font-medium text-emerald-700">
+      <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-700">
         <svg viewBox="0 0 24 24" fill="none" class="w-3.5 h-3.5" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
         </svg>
@@ -65,9 +66,9 @@ function labelOf(type: StepType): string {
           class="relative mt-0.5 flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-semibold shrink-0"
           :class="
             isDone(step.type)
-              ? 'bg-emerald-500 text-white'
+              ? 'bg-emerald-600 text-white'
               : isActive(step.type)
-                ? 'bg-indigo-500 text-white animate-pulse'
+                ? 'bg-[#C8A96A] text-white animate-pulse'
                 : 'bg-stone-200 text-stone-500'
           "
         >
@@ -79,7 +80,7 @@ function labelOf(type: StepType): string {
 
         <!-- 文案 -->
         <div class="min-w-0">
-          <div class="text-sm" :class="isActive(step.type) ? 'text-indigo-700 font-medium' : 'text-stone-700'">
+          <div class="text-sm" :class="isActive(step.type) ? 'text-emerald-800 font-medium' : 'text-stone-700'">
             {{ labelOf(step.type) }}
           </div>
         </div>

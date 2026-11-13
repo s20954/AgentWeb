@@ -58,7 +58,7 @@ const rendered = computed(() => {
       <!-- 用户气泡 -->
       <div
         v-if="isUser"
-        class="rounded-2xl rounded-br-sm bg-indigo-600 text-white px-4 py-2.5 text-sm whitespace-pre-wrap"
+        class="rounded-2xl rounded-br-sm bg-emerald-700 text-white px-4 py-2.5 text-sm whitespace-pre-wrap"
       >
         {{ message.content }}
       </div>
@@ -156,7 +156,7 @@ const rendered = computed(() => {
   padding: 0;
 }
 .md-body :deep(a) {
-  color: #4f46e5;
+  color: #047857;
   text-decoration: underline;
   word-break: break-all;
 }

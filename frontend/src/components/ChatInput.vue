@@ -35,8 +35,8 @@ function submit(): void {
         :class="[
           'shrink-0 inline-flex items-center gap-1 rounded-xl px-3 py-2.5 text-sm transition-colors border',
           webSearch
-            ? 'bg-indigo-600 border-indigo-600 text-white'
-            : 'bg-white border-stone-200 text-stone-500 hover:border-indigo-300 hover:text-indigo-600',
+            ? 'bg-emerald-700 border-emerald-700 text-white'
+            : 'bg-white border-stone-200 text-stone-500 hover:border-emerald-300 hover:text-emerald-700',
         ]"
         :title="webSearch ? '已开启联网搜索，点击关闭' : '开启联网搜索'"
         @click="emit('toggle-web-search')"
@@ -56,14 +56,14 @@ function submit(): void {
         :placeholder="webSearch
           ? '联网搜索：先查知识库，没有就上网搜（如：莫干山红叶最佳观赏期）'
           : '比如：莫干山，11月1日到3日，预算每晚800，情侣'"
-        class="flex-1 resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-2.5 text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent disabled:opacity-50"
+        class="flex-1 resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-2.5 text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent disabled:opacity-50"
         @keydown.enter.exact.prevent="submit"
       ></textarea>
 
       <button
         type="button"
         :disabled="loading || disabled || !text.trim()"
-        class="shrink-0 inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        class="shrink-0 inline-flex items-center justify-center rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         @click="submit"
       >
         <svg v-if="loading" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">

@@ -34,6 +34,8 @@ export interface Spot {
   openingHours: string
   image: string
   description: string
+  /** 所属地区（用于景点页按地区分组展示周围景点） */
+  area: string
 }
 
 /** 订单实体（对齐规划书 order 表字段，中文状态枚举）。 */
@@ -367,6 +369,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-001',
     name: '莫干山风景区',
     location: '莫干山镇',
+    area: '莫干山',
     openingHours: '08:00 - 17:00',
     image: img('photo-1506905925346-21bda4d32df4'),
     description:
@@ -376,6 +379,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-002',
     name: '庾村文化市集',
     location: '莫干山镇庾村',
+    area: '莫干山',
     openingHours: '09:00 - 21:00',
     image: img('photo-1518005020951-eccb494ad742'),
     description:
@@ -385,6 +389,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-003',
     name: '莫干山国家登山健身步道',
     location: '莫干山镇',
+    area: '莫干山',
     openingHours: '全天开放',
     image: img('photo-1551632811-561732d1e306'),
     description:
@@ -394,6 +399,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-004',
     name: '仙潭村萤火虫水森林',
     location: '莫干山镇仙潭村',
+    area: '莫干山',
     openingHours: '18:00 - 22:00（夏季限定）',
     image: img('photo-1501854140801-50d01698950b'),
     description:
@@ -403,6 +409,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-005',
     name: '武陵村名人别墅群',
     location: '莫干山镇武陵村',
+    area: '莫干山',
     openingHours: '08:30 - 16:30',
     image: '/spots/sp-005.jpg',
     description:
@@ -412,6 +419,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-006',
     name: '下渚湖国家湿地公园',
     location: '德清县下渚湖街道',
+    area: '莫干山',
     openingHours: '08:30 - 16:30',
     image: '/spots/sp-006.jpg',
     description:
@@ -421,6 +429,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-007',
     name: '洱海生态廊道',
     location: '云南大理·洱海西岸',
+    area: '云南大理',
     openingHours: '全天开放',
     image: '/spots/sp-007.jpg',
     description:
@@ -430,6 +439,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-008',
     name: '丽江古城',
     location: '云南丽江·古城区',
+    area: '云南丽江',
     openingHours: '全天开放',
     image: '/spots/sp-008.jpg',
     description:
@@ -439,6 +449,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-009',
     name: '成都大熊猫繁育研究基地',
     location: '四川成都·成华区',
+    area: '四川成都',
     openingHours: '07:30 - 18:00',
     image: '/spots/sp-009.jpg',
     description:
@@ -448,6 +459,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-010',
     name: '西湖风景名胜区',
     location: '浙江杭州·西湖区',
+    area: '浙江杭州',
     openingHours: '全天开放（部分收费景点 07:30 - 17:30）',
     image: '/spots/sp-010.jpg',
     description:
@@ -457,6 +469,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-011',
     name: '亚龙湾热带天堂森林公园',
     location: '海南三亚·亚龙湾',
+    area: '海南三亚',
     openingHours: '07:30 - 17:30',
     image: '/spots/sp-011.jpg',
     description:
@@ -466,6 +479,7 @@ export const spotList: Spot[] = [
     spotId: 'sp-012',
     name: '鼓浪屿',
     location: '福建厦门·思明区',
+    area: '福建厦门',
     openingHours: '全天开放（轮渡 07:10 - 17:30）',
     image: '/spots/sp-012.jpg',
     description:

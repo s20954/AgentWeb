@@ -82,12 +82,12 @@ async function runQuote(room: RoomCard) {
       v-for="room in cards"
       :key="room.roomId"
       class="relative flex flex-col rounded-2xl border bg-white shadow-sm overflow-hidden hover:shadow-md transition-shadow"
-      :class="room.roomId === recommendedId ? 'border-indigo-400 ring-2 ring-indigo-100' : 'border-stone-200'"
+      :class="room.roomId === recommendedId ? 'border-emerald-400 ring-2 ring-emerald-100' : 'border-stone-200'"
     >
       <!-- 主推角标 -->
       <span
         v-if="room.roomId === recommendedId"
-        class="absolute top-2 left-2 z-10 rounded-full bg-indigo-600 text-white text-xs px-2 py-0.5 font-medium"
+        class="absolute top-2 left-2 z-10 rounded-full bg-emerald-700 text-white text-xs px-2 py-0.5 font-medium"
       >
         主推
       </span>
@@ -116,7 +116,7 @@ async function runQuote(room: RoomCard) {
         <div class="flex items-start justify-between gap-2">
           <h4 class="font-semibold text-stone-900 text-sm leading-snug">{{ room.title }}</h4>
           <div class="shrink-0 text-right">
-            <span class="text-indigo-600 font-bold text-base">¥{{ room.basePrice }}</span>
+            <span class="text-emerald-700 font-bold text-base">¥{{ room.basePrice }}</span>
             <span class="text-xs text-stone-500">/晚起</span>
           </div>
         </div>
@@ -137,7 +137,7 @@ async function runQuote(room: RoomCard) {
         <!-- 报价区（让评委能一路点到底） -->
         <div class="mt-auto pt-3">
           <button
-            class="w-full rounded-lg bg-indigo-600 text-white text-xs py-2 font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="w-full rounded-lg bg-emerald-700 text-white text-xs py-2 font-medium hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed"
             :disabled="!booking || quoteOf(room.roomId).loading"
             @click="runQuote(room)"
           >
@@ -164,7 +164,7 @@ async function runQuote(room: RoomCard) {
             </div>
             <div class="flex justify-between font-semibold text-stone-900 border-t border-stone-200 pt-1">
               <span>含全部费用</span>
-              <span class="text-indigo-600">¥{{ quoteOf(room.roomId).data?.total }}</span>
+              <span class="text-emerald-700">¥{{ quoteOf(room.roomId).data?.total }}</span>
             </div>
           </div>
 
