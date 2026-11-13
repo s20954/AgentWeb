@@ -13,8 +13,15 @@ import com.minsu.agent.llm.LlmClient;
 import com.minsu.agent.llm.LlmMessage;
 import com.minsu.agent.step.StepEvent;
 import com.minsu.agent.step.StepEventType;
+import com.minsu.rag.RagService;
 import com.minsu.tool.ToolDispatcher;
+import com.minsu.tool.ToolRegistry;
 import com.minsu.tool.ToolResult;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Agent 层核心 —— 七步收敛循环 + 思考链事件。
@@ -32,9 +39,17 @@ import com.minsu.tool.ToolResult;
 @Service
 public class AgentService {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentService.class);
+
+    /** LLM 自主工具调用循环的最大轮数（防止 LLM 无休止调用工具）。 */
+    private static final int MAX_TOOL_ROUNDS = 5;
+
     private final ToolDispatcher toolDispatcher;
+    private final ToolRegistry toolRegistry;
     private final LlmClient llmClient;
     private final ConversationMemory conversationMemory;
+    private final RagService ragService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 会话级状态缓存（sessionId -> AgentState），支撑多轮收敛。 */
     private final ConcurrentMap<String, AgentState> sessions = new ConcurrentHashMap<>();
@@ -45,10 +60,13 @@ public class AgentService {
     /** 会话状态不活跃多久后清理（与 ConversationMemory TTL 对齐）。 */
     private static final long SESSION_TTL_MS = 30 * 60 * 1000L;
 
-    public AgentService(ToolDispatcher toolDispatcher, LlmClient llmClient, ConversationMemory conversationMemory) {
+    public AgentService(ToolDispatcher toolDispatcher, ToolRegistry toolRegistry, LlmClient llmClient,
+                        ConversationMemory conversationMemory, RagService ragService) {
         this.toolDispatcher = toolDispatcher;
+        this.toolRegistry = toolRegistry;
         this.llmClient = llmClient;
         this.conversationMemory = conversationMemory;
+        this.ragService = ragService;
     }
 
     /** 思考链/文本事件回调。 */
@@ -96,10 +114,23 @@ public class AgentService {
             return askAnswer;
         }
 
-        // ---- 第 4 步：调用地域知识 ----
+        // ---- 第 4 步：调用地域知识（真实检索，而非空壳事件）----
         sink.step(StepEvent.of(StepEventType.LOADING_KNOWLEDGE, "加载" + state.getDestination() + "片区知识…"));
+        List<Map<String, Object>> knowledgeHits = loadRegionalKnowledge(state);
 
-        // ---- 第 5 步：四轴筛选 ----
+        // ---- 第 5 步：双轨 —— 规则筛选 或 LLM 自主工具调用 ----
+        // 判断：需求是否超出规则覆盖范围（软性/知识性/偏好类，如带宠物、要温泉、问政策）
+        boolean softDemand = isSoftDemand(state, userInput);
+        if (softDemand && llmClient.isConfigured()) {
+            // 轨道 B：LLM 自主工具调用（真 Function Calling）
+            sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "让我自主判断该查什么、该调哪个工具…"));
+            String autonomousAnswer = runLlmToolLoop(sessionId, userInput, state, history, sink);
+            sink.text(autonomousAnswer);
+            conversationMemory.appendTurn(sessionId, userInput, autonomousAnswer);
+            return autonomousAnswer;
+        }
+
+        // 轨道 A：确定性四轴筛选（规则路径，稳 + 可解释）
         sink.step(StepEvent.of(StepEventType.FILTERING, "从候选房源中筛选…"));
         List<Map<String, Object>> candidates = filterCandidates(sessionId, state);
         state.setCandidates(candidates);
@@ -426,6 +457,176 @@ public class AgentService {
             // 润色失败不影响主流程，回退模板
         }
         return template;
+    }
+
+    /**
+     * 第 4 步：真实调用地域知识库检索，返回 Top-K 命中（供后续 LLM 规划/筛选参考）。
+     * 此前此处只有事件壳子、未真正调用 RAG，是「AI 含量」空洞之一。
+     */
+    private List<Map<String, Object>> loadRegionalKnowledge(AgentState state) {
+        String query = buildKnowledgeQuery(state);
+        List<RagService.Hit> hits = ragService.search(query, 3);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (RagService.Hit h : hits) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("category", h.category());
+            m.put("content", h.content());
+            m.put("score", Math.round(h.score() * 100) / 100.0);
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** 构造地域知识检索 query：目的地 + 已识别实体，保证能召回到对应片区/政策/攻略。 */
+    private String buildKnowledgeQuery(AgentState state) {
+        StringBuilder sb = new StringBuilder();
+        if (state.getDestination() != null) sb.append(state.getDestination());
+        if (state.getStyle() != null) sb.append(" ").append(state.getStyle());
+        if (state.getRelationship() != null) sb.append(" ").append(state.getRelationship());
+        if (sb.length() == 0) sb.append("莫干山");
+        return sb.toString();
+    }
+
+    /**
+     * 判断当前需求是否属于「软性/知识性/偏好类」，即规则四轴筛选覆盖不了的场景。
+     *
+     * <p>规则轨道能处理的是「明确要找房」（有目的地/日期/预算/关系的纯交易意图）；
+     * 以下需求应交给 LLM 自主工具调用（真 Function Calling）：
+     * <ul>
+     *   <li>事实/政策问答：能带宠物吗、几点退房、能开发票吗</li>
+     *   <li>偏好/体验类：想泡私汤、要能看云海、周边有什么吃的</li>
+     *   <li>无明确三要素但仍想获得建议的开放式需求</li>
+     * </ul>
+     */
+    private boolean isSoftDemand(AgentState state, String userInput) {
+        // 硬交易意图（已具备三要素或明确要找房）→ 规则轨道
+        if (state.hasMandatoryInfo()) {
+            return false;
+        }
+        // 命中软性/知识性关键词 → LLM 自主工具调用轨道
+        for (String kw : List.of("宠物", "狗", "猫", "退房", "发票", "开票", "停车", "温泉", "私汤",
+                "云海", "日出", "吃", "餐", "玩", "徒步", "附近", "周边", "政策", "能", "可以", "有没有", "几点")) {
+            if (userInput != null && userInput.contains(kw)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 轨道 B：LLM 自主工具调用循环（真 Function Calling）。
+     *
+     * <p>把「用户需求 + 已抽取实体 + 地域知识」喂给 LLM，并附上 6 个工具的 Function Calling 定义，
+     * 让 LLM 自主决定「该调哪个工具、传什么参」；代码执行工具后把结果回填，循环直到 LLM 输出最终结论。
+     * 这是「真 AI 含量」的核心体现——LLM 不是文案，而是决策者。
+     *
+     * <p>安全护栏：最多循环 {@code MAX_TOOL_ROUNDS} 轮，防止 LLM 陷入无休止调用。
+     */
+    private String runLlmToolLoop(String sessionId, String userInput, AgentState state,
+                                  List<LlmMessage> history, EventSink sink) {
+        List<LlmMessage> messages = new ArrayList<>();
+        messages.add(LlmMessage.system(buildToolCallingSystemPrompt()));
+        messages.addAll(history);
+        // 把已抽取的实体作为确定性事实喂给 LLM，避免它重复抽取、也保留可解释性
+        messages.add(LlmMessage.user("用户需求：" + userInput + "\n已识别信息：" + summarizeExtracted(state)));
+
+        List<Map<String, Object>> toolSpecs = toolRegistry.allFunctionSpecs();
+
+        for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            LlmClient.LlmResponse resp;
+            try {
+                resp = llmClient.chat(messages, toolSpecs);
+            } catch (Exception e) {
+                // LLM 调用失败 → 降级到规则筛选结果兜底，不抛断主流程
+                log.warn("LLM 自主工具调用失败，降级规则兜底：{}", e.toString());
+                return fallbackToRuleAnswer(state);
+            }
+            if (resp == null) {
+                return fallbackToRuleAnswer(state);
+            }
+
+            // 无 tool_calls：LLM 认为信息已够，直接输出最终结论
+            if (resp.toolCalls() == null || resp.toolCalls().isEmpty()) {
+                return resp.content() == null || resp.content().isBlank()
+                        ? fallbackToRuleAnswer(state)
+                        : resp.content();
+            }
+
+            // 有 tool_calls：记录 assistant 消息，逐个执行工具并回填 tool 消息
+            messages.add(LlmMessage.assistantToolCalls(resp.toolCalls()));
+            for (Map<String, Object> call : resp.toolCalls()) {
+                Map<String, Object> fn = (Map<String, Object>) call.get("function");
+                String toolName = String.valueOf(fn.get("name"));
+                String argsJson = String.valueOf(fn.get("arguments"));
+                String callId = String.valueOf(call.get("id"));
+
+                // 推思考链事件：AI 正在调用某个工具
+                sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "调用工具 " + toolName + " …"));
+
+                Map<String, Object> args = parseArgs(argsJson);
+                ToolResult result = toolDispatcher.dispatch(sessionId, toolName, args);
+                // 工具结果回填（role=tool），让 LLM 基于真实结果继续判断
+                messages.add(LlmMessage.tool(callId, serializeToolResult(result)));
+            }
+        }
+
+        // 循环超限：降级兜底
+        return fallbackToRuleAnswer(state);
+    }
+
+    /** 工具调用 System Prompt：约束 LLM 的决策边界与输出口径。 */
+    private String buildToolCallingSystemPrompt() {
+        return """
+                你是「栖迟」民宿预约顾问的智能决策内核。你可以调用工具来回答用户的问题。
+
+                # 你的职责
+                根据用户需求和已识别信息，自主判断「该调用哪个工具、传什么参数」，用真实工具结果来回答，而不是凭空编造。
+
+                # 工具使用原则
+                - 找房/筛选用 search_rooms；锁定某套房要价格用 quote_price；下单用 create_order；查订单用 get_order；取消用 cancel_order；问政策/房源/周边知识用 ask_house_info。
+                - 一次可以调用多个工具，但只调用真正需要的；拿到结果后如果信息还不够，可以继续调用。
+                - 信息足够时，直接输出最终回答，不要再调工具。
+
+                # 输出要求
+                - 用自然、有温度的中文回答，像真人顾问一样。
+                - 不要编造工具没返回的事实（如虚构房源名、价格、政策）。
+                - 最终回答要落到「用户下一步该做什么」上。
+                """;
+    }
+
+    /** 解析 LLM 返回的工具参数 JSON 字符串为 Map。 */
+    private Map<String, Object> parseArgs(String argsJson) {
+        if (argsJson == null || argsJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(argsJson, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
+            });
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    /** 把 ToolResult 序列化为回填给 LLM 的字符串。 */
+    private String serializeToolResult(ToolResult result) {
+        try {
+            if (result.success()) {
+                return objectMapper.writeValueAsString(result.data());
+            }
+            return "工具 " + result.toolName() + " 执行失败：" + objectMapper.writeValueAsString(result.data());
+        } catch (Exception e) {
+            return "{\"note\":\"工具结果序列化异常\"}";
+        }
+    }
+
+    /** LLM 工具调用链路失败/超限时的兜底：回退到规则筛选的话术。 */
+    private String fallbackToRuleAnswer(AgentState state) {
+        List<Map<String, Object>> candidates = filterCandidates("fallback", state);
+        state.setCandidates(candidates);
+        if (candidates.isEmpty()) {
+            return "我暂时没能给出合适建议，你可以补充一下想去的目的地、日期和预算，我再帮你筛。";
+        }
+        return generateFinalAnswer(state, List.of());
     }
 
     /**

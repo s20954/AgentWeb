@@ -32,9 +32,10 @@ class AgentServiceTest {
 
     @BeforeEach
     void setUp() {
-        ToolDispatcher dispatcher = new ToolDispatcher(new ToolRegistry(), new RoomStore(), new OrderStore(),
-                new RagService(new KbStore(new com.minsu.rag.KbRepository(
-                        System.getProperty("java.io.tmpdir") + "/minsu-kb-test-" + System.nanoTime() + ".db"))));
+        ToolRegistry registry = new ToolRegistry();
+        RagService ragService = new RagService(new KbStore(new com.minsu.rag.KbRepository(
+                System.getProperty("java.io.tmpdir") + "/minsu-kb-test-" + System.nanoTime() + ".db")));
+        ToolDispatcher dispatcher = new ToolDispatcher(registry, new RoomStore(), new OrderStore(), ragService);
         // 用未配置的 LLM client（本轮骨架确定性逻辑不依赖 LLM，仅保留注入）
         LlmClient noopLlm = new LlmClient() {
             @Override
@@ -47,7 +48,7 @@ class AgentServiceTest {
                 return false;
             }
         };
-        agentService = new AgentService(dispatcher, noopLlm, new ConversationMemory());
+        agentService = new AgentService(dispatcher, registry, noopLlm, new ConversationMemory(), ragService);
         steps = new ArrayList<>();
         texts = new ArrayList<>();
     }

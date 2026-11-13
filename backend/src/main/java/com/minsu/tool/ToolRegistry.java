@@ -86,8 +86,8 @@ public class ToolRegistry {
 
         tools.put("quote_price", new ToolDefinition(
                 "quote_price",
-                "对某一套已确定的房源（有 roomId）计算含全部费用的最终报价。用户在「锁定某套房、要确认价格」时使用。",
-                "边界：当用户有 roomId、要确认价时用本工具；当用户还没确定房间、在「筛」时改用 search_rooms。区别是「有没有 roomId」。",
+                "对某一套已确定的房源（有 roomId）计算含全部费用的最终报价。当用户说「多少钱/算一下/报个价/价格是多少」等要看价格时使用。",
+                "边界：当用户有 roomId、且意图是「看价格/算价格」时用本工具 quote_price；当用户出现「订/下单/预订」等下单意图词时改用 create_order；当用户还没确定房间、在「筛」时改用 search_rooms。区别的客观判据是「看价 vs 下单 vs 找房」。",
                 "前置条件：已有 roomId（来自 search_rooms 结果）。",
                 params,
                 "返回含全部费用的总价明细（房费+清洁费+服务费等）；带 note='已含价，无需再调报价'。",
@@ -107,8 +107,8 @@ public class ToolRegistry {
 
         tools.put("create_order", new ToolDefinition(
                 "create_order",
-                "为已确认的房源创建预订订单（写入操作）。用户已确认价格、明确表达「要订」后使用。",
-                "边界：当用户有 roomId + 已确认价 + 明确要订时用本工具；仅看价格用 quote_price；仅筛选用 search_rooms。",
+                "为已确认的房源创建预订订单（写入操作）。当用户明确表达下单意图——例如说「就订/帮我订/下单/预订/我要订/帮我下单」这类词时，必须用本工具。",
+                "边界：当用户出现「订/下单/预订/要订」等下单意图词时用本工具 create_order；即便用户同时给出了 roomId 和日期，只要意图是「下单」而非「看价格」就归 create_order。仅看价格、说「多少钱/算一下/报个价」时用 quote_price；仅在找房筛选时用 search_rooms。区别的客观判据是「用户是在下单，还是在看价/找房」。",
                 "前置条件：已调用 quote_price 确认价格，且用户明确同意下单。",
                 params,
                 "返回订单号 orderId 与订单状态；写入操作需用户二次确认。",
@@ -141,8 +141,8 @@ public class ToolRegistry {
 
         tools.put("cancel_order", new ToolDefinition(
                 "cancel_order",
-                "取消一个已有订单（写入操作）。用户明确要取消时使用。",
-                "边界：当用户要取消订单时用本工具；仅查看订单状态用 get_order。区别是「取消」还是「查」。",
+                "取消一个已有订单（写入操作）。当用户明确表达取消意图——例如说「取消/退掉/退了/退了吧/不要了/不去了」这类词时，必须用本工具。",
+                "边界：当用户出现「取消/退/不要了/不去了」等取消意图词时用本工具 cancel_order；即便用户提到「订单」，只要意图是「退」而非「查状态」就归 cancel_order。仅查看订单状态、说「怎么样/什么状态/进度」时用 get_order。区别的客观判据是「用户在取消，还是在查」。",
                 "前置条件：已有 orderId，且订单可取消（未入住）。",
                 params,
                 "返回取消结果与是否产生取消费用；写入操作需用户二次确认。",

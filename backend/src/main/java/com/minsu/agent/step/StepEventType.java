@@ -22,6 +22,9 @@ public enum StepEventType {
     /** 5 四轴筛选：从 N 套筛到候选。 */
     FILTERING("filtering", "正在筛选房源"),
 
+    /** 5.5 AI 自主工具调用：LLM 决定调用某个工具（Function Calling）。 */
+    TOOL_CALLING("tool_calling", "正在调用工具"),
+
     /** 6 包装方案：组织推荐方案。 */
     PACKAGING("packaging", "组织推荐方案"),
 

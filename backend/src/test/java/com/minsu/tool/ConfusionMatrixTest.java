@@ -61,7 +61,7 @@ class ConfusionMatrixTest {
             new Case("带孩子去莫干山玩，想找个适合亲子的民宿", "search_rooms", "relationship", "亲子"),
             // ---- quote_price（锁定某套，看价）----
             new Case("yg-001 这套房住两晚要多少钱", "quote_price", "roomId", "yg-001"),
-            new Case("帮我把刚才那套竹海玻璃屋报个价", "quote_price", "roomId", "ll-001"),
+            new Case("帮我把 ll-001 这套报个价", "quote_price", "roomId", "ll-001"),
             // ---- create_order（明确要订）----
             new Case("就订 yg-001 这套，11月1日入住，住到3号，两个人", "create_order", "roomId", "yg-001"),
             new Case("帮我下单，房号 ll-001，1号到3号", "create_order", "roomId", "ll-001"),
@@ -94,12 +94,17 @@ class ConfusionMatrixTest {
         matrix.append("------------------------------------------------------\n");
 
         for (Case c : CASES) {
+            // 用 tool_choice=required 强制模型必须选一个工具：
+            // 混淆矩阵测的是「边界句能否让模型首轮选对工具」，而不是「模型会不会选择调用工具」。
+            // 若用默认 auto，deepseek-flash 面对自然语言会大量直接文本回答、不产生 tool_calls，
+            // 导致大量「(无)」的假阴性，把「工具 Schema 写得对不对」误判成「模型不调工具」。
             LlmClient.LlmResponse resp = llmClient.chat(
                     List.of(
-                            LlmMessage.system("你是民宿预约顾问。根据用户意图，选择最合适的工具并填写参数。只调用一个工具。"),
+                            LlmMessage.system("你是民宿预约顾问。根据用户意图，从提供的工具中必须且只能选择最合适的一个工具，并填写参数。"),
                             LlmMessage.user(c.intent())
                     ),
-                    specs
+                    specs,
+                    "required"
             );
 
             String actualTool = null;

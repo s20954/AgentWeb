@@ -55,6 +55,19 @@ public class DeepSeekLlmClient implements LlmClient {
 
     @Override
     public LlmResponse chat(List<LlmMessage> messages, List<Map<String, Object>> tools) {
+        return chat(messages, tools, "auto");
+    }
+
+    /**
+     * 一次 LLM 补全调用，可指定 {@code toolChoice}。
+     *
+     * <p>生产 Agent 循环用 {@code auto}（让模型自主决定是否调工具）；
+     * 工具层混淆矩阵验收用 {@code required}（强制模型必须选一个工具），
+     * 否则「auto」下模型倾向直接文本回答、不产生 tool_calls，验收测的是假阴性。
+     *
+     * @param toolChoice OpenAI 兼容协议的 tool_choice：auto / none / required
+     */
+    public LlmResponse chat(List<LlmMessage> messages, List<Map<String, Object>> tools, String toolChoice) {
         if (!isConfigured()) {
             throw new IllegalStateException("LLM_API_KEY 未配置，无法调用 DeepSeek（应走降级桩）");
         }
@@ -65,7 +78,13 @@ public class DeepSeekLlmClient implements LlmClient {
         body.put("stream", false);
         if (tools != null && !tools.isEmpty()) {
             body.put("tools", tools);
-            body.put("tool_choice", "auto");
+            body.put("tool_choice", toolChoice);
+            // DeepSeek 官方限制：tool_choice=required / 指定具体函数 在思考模式(thinking mode)下
+            // 会返回 400。deepseek-flash / v4-pro 默认开启思考模式，因此强制工具选择时必须显式
+            // 关闭思考模式（reasoning_effort=none）。auto/none 无需关闭。
+            if (!"auto".equals(toolChoice) && !"none".equals(toolChoice)) {
+                body.put("reasoning_effort", "none");
+            }
         }
 
         JsonNode message = postChat(body);
