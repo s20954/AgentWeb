@@ -79,6 +79,29 @@ public class AgentService {
 
         /** 推一段文本（可多次，逐段渲染打字机效果）。 */
         void text(String text);
+
+        /**
+         * 客户端是否已断连（SSE 取消）。Agent 在关键步骤与写工具前检查，
+         * 为 true 时立即中止收敛，避免用户关页后仍偷偷下单/支付。
+         * 默认 false 保证所有测试桩/非 SSE 调用零改动兼容。
+         */
+        default boolean isCancelled() {
+            return false;
+        }
+    }
+
+    /** 客户端断连 abort 异常：内部信号，不对外暴露，ChatController 据此静默收尾。 */
+    private static final class ClientCancelledException extends RuntimeException {
+        ClientCancelledException() {
+            super("client cancelled");
+        }
+    }
+
+    /** 检查客户端是否断连，是则抛取消信号中止本次收敛。 */
+    private static void ensureActive(EventSink sink) {
+        if (sink.isCancelled() || Thread.currentThread().isInterrupted()) {
+            throw new ClientCancelledException();
+        }
     }
 
     /**
@@ -100,6 +123,21 @@ public class AgentService {
      * @return 最终文本回复
      */
     public String run(String userId, String sessionId, String userInput, EventSink sink) {
+        // 并发修复（2026-11-17）：同一 sessionId 的收敛串行化。
+        // AgentState 内部 gaps/candidates 是普通 ArrayList，双击发送/超时重试/同会话并发
+        // 会让多个虚拟线程交错读写同一状态（ConcurrentModificationException / 候选串轮）。
+        // 用 per-session 锁对象（computeIfAbsent 保证同一 sessionId 拿到同一把锁）包住整个收敛。
+        Object sessionLock = sessionLocks.computeIfAbsent(sessionId, k -> new Object());
+        synchronized (sessionLock) {
+            return runInternal(userId, sessionId, userInput, sink);
+        }
+    }
+
+    /** 会话级互斥锁表（sessionId -> 锁对象），仅用于串行化同一会话的收敛。 */
+    private final ConcurrentMap<String, Object> sessionLocks = new ConcurrentHashMap<>();
+
+    /** run 的实际收敛逻辑（调用方 run 已按 sessionId 加锁）。 */
+    private String runInternal(String userId, String sessionId, String userInput, EventSink sink) {
         // 取旧会话状态（多轮累积），无则新建；先清扫过期/超限条目，防内存泄漏
         evictSessionsIfNeeded();
         AgentState state = sessions.computeIfAbsent(sessionId, k -> new AgentState());
@@ -124,6 +162,7 @@ public class AgentService {
         // 用户说「yg-001 多少钱」「就订这套」「退了吧」全部失灵（报价/下单成假动作）。
         // 注意：交易意图必须先于「候选聚焦」路由，否则「就订候选1」会被候选聚焦误拦截成「介绍候选1」。
         if (llmClient.isConfigured() && isTransactionIntent(userInput)) {
+            ensureActive(sink); // 断连则不进入含下单/支付的写工具轨道
             sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "识别到报价/订单操作，让我调工具处理…"));
             String txAnswer = runLlmToolLoop(userId, userInput, state, history, sink);
             sink.text(txAnswer);
@@ -188,6 +227,7 @@ public class AgentService {
             return kbAnswer;
         }
         if (softDemand && llmClient.isConfigured()) {
+            ensureActive(sink);
             // 轨道 B：LLM 自主工具调用（真 Function Calling）
             sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "让我自主判断该查什么、该调哪个工具…"));
             String autonomousAnswer = runLlmToolLoop(userId, userInput, state, history, sink);
@@ -319,9 +359,18 @@ public class AgentService {
                 int year = rm.group(1) == null ? java.time.LocalDate.now().getYear() : Integer.parseInt(rm.group(1));
                 checkInDate = java.time.LocalDate.of(year, Integer.parseInt(checkInMonth), Integer.parseInt(checkInDay));
                 checkOutDate = java.time.LocalDate.of(year, Integer.parseInt(checkOutMonth), Integer.parseInt(checkOutDay));
-                // 跨年范围（如「12月28日到1月2日」）：离店月份小于入住月份，离店落到下一年
+                // 倒挂日期修复（2026-11-17）：仅「显式给出第二段月份且离店月 < 入住月」才判定为跨年
+                // （如「12月28日到1月2日」）。同月内「11月5日到11月3日」或同日属笔误/1晚意图，
+                // 绝不能盲目 plusYears(1) 生成「住一年」的荒谬订单。
                 if (!checkOutDate.isAfter(checkInDate)) {
-                    checkOutDate = checkOutDate.plusYears(1);
+                    boolean explicitCrossYear = rm.group(4) != null
+                            && Integer.parseInt(checkOutMonth) < Integer.parseInt(checkInMonth);
+                    if (explicitCrossYear) {
+                        checkOutDate = checkOutDate.plusYears(1);
+                    } else {
+                        // 同月倒挂/同日：按「住 1 晚」推导，离店 = 入住 + 1 天
+                        checkOutDate = checkInDate.plusDays(1);
+                    }
                 }
                 // 未显式给年份且入住日期已过，默认指向明年（不存在订过去日期的场景）
                 if (rm.group(1) == null && checkInDate.isBefore(java.time.LocalDate.now())) {
@@ -962,6 +1011,7 @@ public class AgentService {
         List<Map<String, Object>> toolSpecs = toolRegistry.allFunctionSpecs();
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            ensureActive(sink); // 断连即停，不继续下一轮 LLM/工具调用
             LlmClient.LlmResponse resp;
             try {
                 resp = llmClient.chat(messages, toolSpecs);
@@ -984,6 +1034,8 @@ public class AgentService {
             // 有 tool_calls：记录 assistant 消息，逐个执行工具并回填 tool 消息
             messages.add(LlmMessage.assistantToolCalls(resp.toolCalls()));
             for (Map<String, Object> call : resp.toolCalls()) {
+                // 写工具前最后一道闸：客户端断连立即中止，杜绝关页后仍下单/支付
+                ensureActive(sink);
                 Map<String, Object> fn = (Map<String, Object>) call.get("function");
                 String toolName = String.valueOf(fn.get("name"));
                 String argsJson = String.valueOf(fn.get("arguments"));
@@ -994,6 +1046,26 @@ public class AgentService {
 
                 Map<String, Object> args = parseArgs(argsJson);
                 ToolResult result = toolDispatcher.dispatch(userId, toolName, args);
+                // 结构化订单事件（2026-11-17）：下单/支付成功后推带 kind=order_result 的 payload，
+                // 前端据此按字段渲染订单卡片，不再靠正则从 LLM 自由文本里抠订单号/金额/状态。
+                if (result.success() && ("create_order".equals(toolName) || "pay_order".equals(toolName))
+                        && result.data() instanceof Map<?, ?> rawData) {
+                    Map<String, Object> orderPayload = new LinkedHashMap<>();
+                    orderPayload.put("kind", "order_result");
+                    orderPayload.putAll((Map<String, Object>) rawData);
+                    // 补上房源展示信息（从本轮候选反查 roomId → title/cover）
+                    Object roomIdVal = rawData.get("roomId");
+                    if (roomIdVal != null) {
+                        for (Map<String, Object> c : state.getCandidates()) {
+                            if (roomIdVal.equals(c.get("roomId"))) {
+                                orderPayload.put("title", c.get("title"));
+                                orderPayload.put("cover", c.get("cover"));
+                                break;
+                            }
+                        }
+                    }
+                    sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "订单已生成", orderPayload));
+                }
                 // 工具结果回填（role=tool），让 LLM 基于真实结果继续判断
                 messages.add(LlmMessage.tool(callId, serializeToolResult(result)));
             }
@@ -1068,6 +1140,7 @@ public class AgentService {
             if (now - lastTouch > SESSION_TTL_MS) {
                 sessions.remove(id);
                 sessionTouch.remove(id);
+                sessionLocks.remove(id);
             }
         });
         while (sessions.size() > MAX_SESSIONS) {
@@ -1080,6 +1153,7 @@ public class AgentService {
             }
             sessions.remove(oldest);
             sessionTouch.remove(oldest);
+            sessionLocks.remove(oldest);
         }
     }
 }

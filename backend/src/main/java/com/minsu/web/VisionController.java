@@ -50,7 +50,7 @@ public class VisionController {
             return Mono.just(empty);
         }
 
-        if (!llmClient.isConfigured()) {
+        if (!llmClient.isVisionConfigured()) {
             return Mono.just(fallback());
         }
 

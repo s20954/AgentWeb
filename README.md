@@ -22,10 +22,11 @@ AgentWeb/
 │   │   │   └── portal/             # 门户页面：PortalLayout / Home / Homestay(列表+详情)
 │   │   │                           #   / Spot(列表+详情) / Order / Profile / NotFound
 │   │   ├── components/             # ChatInput / ChatMessage / ThinkingChain / RoomCards /
-│   │   │                           #   VoiceInput（语音）/ ImageSelect（看图选房）
+│   │   │                           #   VoiceInput（语音）/ ImageSelect（看图选房）/
+│   │   │                           #   OrderPayCard（订单支付卡）/ ReviewSection / StarRating
 │   │   ├── mock/data.ts            # 门户 Mock 数据层（民宿/景点/订单/横幅，覆盖全国多地）
-│   │   ├── api/                    # chat.ts / search.ts（SSE 流式 + REST）
-│   │   ├── stores/                 # app.ts / chat.ts（Pinia 状态）
+│   │   ├── api/                    # chat.ts（SSE 流式）/ search.ts / tools.ts（6 工具调用）
+│   │   ├── stores/                 # app.ts / chat.ts / userData.ts（Pinia 状态 + 订单本地持久化）
 │   │   └── types/chat.ts           # 前端类型定义
 │   ├── index.html
 │   ├── vite.config.ts              # 含 /api → 8080 的 dev 代理
@@ -53,7 +54,7 @@ AgentWeb/
 │   ├── deploy.sh
 │   └── .env.example
 ├── tools/                          # 本地开发工具（nginx 配置）
-└── bug-report-20261027.md          # 工具层实测 bug 报告
+└── bug-report-20261117.md          # 全项目测试报告（分级 / 实测复现 / 修复验证）
 ```
 
 ## 二、四层架构
@@ -137,4 +138,12 @@ cp deploy/.env.example deploy/.env
 
 > 注意：`LLM_API_KEY` 需在启动后端 Java 进程的终端中生效（Windows 下修改环境变量后需新开终端），否则联网搜索会降级为拼接字符串。
 
---
+## 六、质量保障
+
+- **后端测试**：`mvn test` 覆盖工具层六槽位校验、错误三类型、Agent 状态机与订单幂等；工具层混淆矩阵要求首轮工具选择通过率 ≥ 90%。
+- **前端验证**：`vue-tsc` 类型检查 + `vite build` 生产构建，均通过。
+- **契约与安全**：前后端统一 SSE 事件协议通信；密钥只走环境变量，不进公开仓库；订单归属绑定持久 userId。
+
+---
+
+> 本项目为传智杯全国高校 AI Web 开发挑战赛参赛作品。

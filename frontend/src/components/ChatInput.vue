@@ -24,6 +24,13 @@ function submit(): void {
   emit('send', value, props.webSearch)
   text.value = ''
 }
+
+/** 回车发送：中文输入法组合期间（isComposing / keyCode 229）按 Enter 是选字，不能发送。 */
+function onEnter(e: KeyboardEvent): void {
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  submit()
+}
 </script>
 
 <template>
@@ -57,7 +64,7 @@ function submit(): void {
           ? '联网搜索：先查知识库，没有就上网搜（如：莫干山红叶最佳观赏期）'
           : '比如：莫干山，11月1日到3日，预算每晚800，情侣'"
         class="flex-1 resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-2.5 text-sm text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent disabled:opacity-50"
-        @keydown.enter.exact.prevent="submit"
+        @keydown.enter.exact="onEnter"
       ></textarea>
 
       <button

@@ -45,6 +45,14 @@ public interface LlmClient {
     boolean isConfigured();
 
     /**
+     * 是否配置了视觉能力。默认等同主 LLM 配置；
+     * 视觉模型独立配置的实现（DeepSeekLlmClient）可覆盖为读取 VISION_* 配置。
+     */
+    default boolean isVisionConfigured() {
+        return isConfigured();
+    }
+
+    /**
      * LLM 回复。
      *
      * @param content      文本内容（可能为 null，当只有 toolCalls 时）

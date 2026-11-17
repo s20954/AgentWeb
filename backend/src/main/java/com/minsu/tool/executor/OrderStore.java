@@ -30,10 +30,16 @@ public class OrderStore {
     /**
      * 创建订单（幂等，原子）。用 {@code compute} 把「查-建-写」合成一个原子操作，
      * 并发下同 idempotencyKey 只会产生一个订单，返回同一订单。
+     *
+     * <p>安全修复（2026-11-17）：幂等键按 userId 命名空间化（{@code userId:idempotencyKey}）。
+     * idempotencyKey 是模型/调用方可填参数，若只按 key 做幂等，用户 B 复用用户 A 的 key
+     * 会直接拿到 A 的订单对象（订单信息泄露 + B 自己的下单被静默吞掉）。加 userId 前缀后
+     * 不同用户的幂等空间天然隔离，同一用户重试仍命中同一订单。
      */
     public Order create(String userId, String roomId, LocalDate checkIn, LocalDate checkOut,
                         int guests, int totalAmount, String idempotencyKey) {
-        String orderId = idempotencyKeyToOrderId.compute(idempotencyKey, (k, existing) -> {
+        String namespacedKey = (userId == null ? "" : userId) + ":" + idempotencyKey;
+        String orderId = idempotencyKeyToOrderId.compute(namespacedKey, (k, existing) -> {
             if (existing != null) {
                 return existing;
             }
@@ -41,7 +47,12 @@ public class OrderStore {
             ordersById.put(newId, new Order(newId, userId, roomId, checkIn, checkOut, guests, totalAmount, Status.PENDING_PAYMENT));
             return newId;
         });
-        return ordersById.get(orderId);
+        // 二次防御：即便命中也校验归属，绝不把他人订单返回给调用方
+        Order order = ordersById.get(orderId);
+        if (order != null && userId != null && !userId.equals(order.userId())) {
+            throw new IllegalStateException("幂等键命中了其他用户的订单，拒绝返回（userId=" + userId + "）");
+        }
+        return order;
     }
 
     public Order get(String orderId) {

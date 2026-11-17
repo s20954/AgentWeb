@@ -48,11 +48,24 @@ public class QuotePriceExecutor extends AbstractToolExecutor {
             throw new ToolException(ToolErrorType.PARAM_INVALID,
                     "离店日期必须晚于入住日期，当前入住=" + checkIn + " 离店=" + checkOut + "，请修正（retryable）。");
         }
+        // 上限校验（2026-11-17）：极端日期致 nights 巨大，(int) 强转乘法溢出成负数
+        if (nights > 30) {
+            throw new ToolException(ToolErrorType.PARAM_INVALID,
+                    "单次预订最多 30 晚，当前 " + nights + " 晚超出范围，请修正（retryable）。");
+        }
 
-        int roomFee = room.basePrice() * (int) nights;
-        int cleaning = 80;            // 固定清洁费
-        int service = (int) Math.round(roomFee * 0.10); // 服务费 10%
-        int total = roomFee + cleaning + service;
+        long roomFeeL = (long) room.basePrice() * nights;
+        long cleaningL = 80;            // 固定清洁费
+        long serviceL = Math.round(roomFeeL * 0.10); // 服务费 10%
+        long totalL = roomFeeL + cleaningL + serviceL;
+        if (totalL > Integer.MAX_VALUE) {
+            throw new ToolException(ToolErrorType.PARAM_INVALID,
+                    "金额超出可处理范围，请缩短入住天数（retryable）。");
+        }
+        int roomFee = (int) roomFeeL;
+        int cleaning = (int) cleaningL;
+        int service = (int) serviceL;
+        int total = (int) totalL;
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("roomId", roomId);

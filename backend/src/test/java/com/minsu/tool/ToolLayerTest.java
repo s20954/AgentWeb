@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -189,6 +190,29 @@ class ToolLayerTest {
 
         assertEquals(r1.data().get("orderId"), r2.data().get("orderId"),
                 "同 idempotencyKey 应返回同一订单（幂等）");
+    }
+
+    @Test
+    void sameIdempotencyKeyAcrossUsersDoesNotShareOrder() {
+        // 回归 2026-11-17 P1：幂等键必须按 userId 隔离，B 复用 A 的 key 不能拿到 A 的订单
+        Map<String, Object> args = Map.of(
+                "roomId", "yg-001", "checkIn", "2026-11-01", "checkOut", "2026-11-03",
+                "guests", 2, "idempotencyKey", "SHARED-KEY-CROSS-USER");
+        ToolResult a = dispatcher.dispatch("user-A", "create_order", args);
+        ToolResult b = dispatcher.dispatch("user-B", "create_order", args);
+        assertTrue(a.success() && b.success());
+        assertNotEquals(a.data().get("orderId"), b.data().get("orderId"),
+                "不同用户即使用相同 idempotencyKey 也应各下各的单，不得串单");
+    }
+
+    @Test
+    void extremeDateIsRejectedNotOverflow() {
+        // 回归 2026-11-17 P3：超长租期不能溢出成负金额订单
+        ToolResult r = dispatcher.dispatch("u1", "create_order", Map.of(
+                "roomId", "yg-001", "checkIn", "2026-11-01", "checkOut", "9999-12-31",
+                "guests", 2, "idempotencyKey", "idem-extreme-date"));
+        assertFalse(r.success(), "超过 30 晚的订单应被参数校验拒绝");
+        assertEquals("PARAM_INVALID", r.data().get("errorType"));
     }
 
     // ---------------------------------------------------------------- 错误三类型

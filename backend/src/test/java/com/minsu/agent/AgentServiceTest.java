@@ -68,6 +68,23 @@ class AgentServiceTest {
         };
     }
 
+    @Test
+    void invertedSameMonthDatesDoNotBecomeOneYear() {
+        // 回归 2026-11-17 P2：「11月5日到11月3日」同月倒挂不得被加一整年，
+        // 应推导为「住 1 晚」的合理区间。
+        // 显式给年份，避免测试随系统当前日期漂移
+        agentService.run("date-session", "2027年11月5日到11月3日去莫干山", sink());
+        String summary = steps.stream()
+                .filter(s -> s.type() == StepEventType.EXTRACTING)
+                .map(StepEvent::message)
+                .filter(m -> m.contains("入住="))
+                .reduce((first, second) -> second) // 取最后一条摘要（抽取结果可视化那条）
+                .orElse("");
+        assertFalse(summary.contains("2028"), "同月倒挂不得被加一整年（离店不应到 2028）：" + summary);
+        assertTrue(summary.contains("2027-11-05") && summary.contains("2027-11-06"),
+                "倒挂应推导为住 1 晚（入住 11-05 / 离店 11-06）：" + summary);
+    }
+
     // ---------------------------------------------------------------- 缺口识别
 
     @Test

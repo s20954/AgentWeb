@@ -1,22 +1,11 @@
-<script setup lang="ts">
-import { computed } from 'vue'
-import { marked, Renderer, type Tokens } from 'marked'
-import type { ChatMessage } from '@/types/chat'
-import ThinkingChain from './ThinkingChain.vue'
-import RoomCards from './RoomCards.vue'
-import OrderPayCard from './OrderPayCard.vue'
-
-const props = defineProps<{
-  message: ChatMessage
-}>()
-
-const isUser = computed(() => props.message.role === 'user')
-
+<script lang="ts">
 /**
- * 消毒链接 href：marked 只做解析不做消毒，LLM/联网内容可构造
- * [x](javascript:alert(1)) 这类危险协议链接。浏览器解析 href 前会先解码 HTML 实体，
- * 所以检查前先解码实体并去掉空白/控制字符，防 `&#106;avascript:`、`java\tscript:` 绕过。
+ * 模块级 Markdown 渲染配置：marked.use 是全局副作用，必须只注册一次。
+ * 放在普通 <script>（非 setup）确保模块加载时执行一次，而非每个组件实例重复注册。
  */
+import { marked, Renderer, type Tokens } from 'marked'
+
+/** 消毒链接 href：解码实体 + 去空白/控制字符，阻断 javascript:/vbscript:/data: 危险协议。 */
 function sanitizeHref(href: string): string {
   const decoded = href
     .replace(/&#x([0-9a-fA-F]+);?/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
@@ -28,7 +17,16 @@ function sanitizeHref(href: string): string {
   return href
 }
 
-// 自定义链接渲染：危险协议只渲染文本（不可点击）；正常链接新窗口打开
+/** HTML 属性转义：防 LLM 构造的 title/href 突破双引号边界注入事件属性。 */
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 const renderer = new Renderer()
 renderer.link = function (this: Renderer, { href, title, tokens }: Tokens.Link): string {
   const text = this.parser.parseInline(tokens)
@@ -36,10 +34,31 @@ renderer.link = function (this: Renderer, { href, title, tokens }: Tokens.Link):
   if (!safe) {
     return text
   }
-  const titleAttr = title ? ` title="${title}"` : ''
-  return `<a href="${safe}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
+  const titleAttr = title ? ` title="${escapeAttr(title)}"` : ''
+  return `<a href="${escapeAttr(safe)}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`
+}
+// 图片同样消毒协议，防 data:/javascript: 注入
+renderer.image = function (this: Renderer, { href, title, text }: Tokens.Image): string {
+  const safe = sanitizeHref(href ?? '')
+  if (!safe) return escapeAttr(text)
+  const titleAttr = title ? ` title="${escapeAttr(title)}"` : ''
+  return `<img src="${escapeAttr(safe)}" alt="${escapeAttr(text)}"${titleAttr} />`
 }
 marked.use({ renderer })
+</script>
+
+<script setup lang="ts">
+import { computed } from 'vue'
+import type { ChatMessage } from '@/types/chat'
+import ThinkingChain from './ThinkingChain.vue'
+import RoomCards from './RoomCards.vue'
+import OrderPayCard from './OrderPayCard.vue'
+
+const props = defineProps<{
+  message: ChatMessage
+}>()
+
+const isUser = computed(() => props.message.role === 'user')
 
 /**
  * Agent 回复按 Markdown 渲染（标题/加粗/列表/引用/链接）。
@@ -83,7 +102,7 @@ const rendered = computed(() => {
 
         <!-- 订单支付卡片：下单后（文本含订单号 + 待支付）渲染「去支付」按钮，点击完成 mock 支付闭环 -->
         <!-- 传入 cards：用后端下发的 roomId→title/cover 映射反查真实民宿名与图片，避免靠正则猜标题 -->
-        <OrderPayCard v-if="message.content" :content="message.content" :cards="message.cards ?? []" />
+        <OrderPayCard v-if="message.content" :content="message.content" :cards="message.cards ?? []" :order="message.order" />
 
         <!-- 流式加载态（还没文本时的骨架） -->
         <div

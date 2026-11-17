@@ -31,27 +31,51 @@ public class DeepSeekLlmClient implements LlmClient {
     private final String apiKey;
     private final String model;
 
+    /** 视觉模型独立配置（2026-11-17 修复）：此前 app.vision.* 声明了却从未被读取。 */
+    private final WebClient visionWebClient;
+    private final String visionApiKey;
+    private final String visionModel;
+
     public DeepSeekLlmClient(
             @Value("${app.llm.base-url:https://api.deepseek.com}") String baseUrl,
             @Value("${app.llm.api-key:}") String apiKey,
-            @Value("${app.llm.model:deepseek-chat}") String model) {
+            @Value("${app.llm.model:deepseek-chat}") String model,
+            @Value("${app.vision.base-url:}") String visionBaseUrl,
+            @Value("${app.vision.api-key:}") String visionApiKey,
+            @Value("${app.vision.model:}") String visionModel) {
         this.apiKey = apiKey;
         this.model = model;
         this.webClient = WebClient.builder()
                 .baseUrl(baseUrl)
                 .defaultHeader("Content-Type", "application/json")
                 .build();
-        // 启动即暴露配置状态：此前「终端没 export LLM_API_KEY」会静默降级，排查全靠猜
+        // 视觉配置缺省时回退到主 LLM 配置，保证「只配一套 key」的用户零改动可用；
+        // 显式配置 VISION_* 时走独立模型/端点（如通义 VL、专用视觉端点）。
+        String vBase = (visionBaseUrl == null || visionBaseUrl.isBlank()) ? baseUrl : visionBaseUrl;
+        this.visionApiKey = (visionApiKey == null || visionApiKey.isBlank()) ? apiKey : visionApiKey;
+        this.visionModel = (visionModel == null || visionModel.isBlank()) ? model : visionModel;
+        this.visionWebClient = WebClient.builder()
+                .baseUrl(vBase)
+                .defaultHeader("Content-Type", "application/json")
+                .build();
         if (isConfigured()) {
             log.info("LLM 已配置：model={}, baseUrl={}", model, baseUrl);
         } else {
             log.warn("LLM_API_KEY 未配置（环境变量与 deploy/.env 均未读到），AI 规划/润色将降级为模板拼接");
+        }
+        if (visionApiKey != null && !visionApiKey.isBlank()) {
+            log.info("视觉模型独立配置已生效：model={}, baseUrl={}", this.visionModel, vBase);
         }
     }
 
     @Override
     public boolean isConfigured() {
         return apiKey != null && !apiKey.isBlank();
+    }
+
+    @Override
+    public boolean isVisionConfigured() {
+        return visionApiKey != null && !visionApiKey.isBlank();
     }
 
     @Override
@@ -174,8 +198,9 @@ public class DeepSeekLlmClient implements LlmClient {
      * @return 模型文本输出（约定为 JSON 字符串）
      */
     public String chatVision(String imageBase64, String mimeType, String prompt) {
-        if (!isConfigured()) {
-            throw new IllegalStateException("LLM_API_KEY 未配置，无法调用视觉模型（应走降级桩）");
+        // 视觉模型独立判定：配置 VISION_API_KEY 时即便主 LLM 未配也可用视觉能力
+        if (visionApiKey == null || visionApiKey.isBlank()) {
+            throw new IllegalStateException("视觉模型未配置（VISION_API_KEY/LLM_API_KEY 均为空），无法调用（应走降级桩）");
         }
 
         Map<String, Object> textPart = Map.of("type", "text", "text", prompt);
@@ -187,19 +212,25 @@ public class DeepSeekLlmClient implements LlmClient {
                 "content", List.of(textPart, imagePart));
 
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("model", model);
+        body.put("model", visionModel);
         body.put("messages", List.of(userMessage));
         body.put("stream", false);
 
-        JsonNode message = postChat(body);
+        // 走视觉专用 WebClient + apiKey，不再误用主 LLM 的配置
+        JsonNode message = postChat(visionWebClient, visionApiKey, body);
         return message.path("content").isNull() ? null : message.path("content").asText();
     }
 
-    /** 发送 /chat/completions 请求并返回 choices[0].message。 */
+    /** 发送 /chat/completions 请求并返回 choices[0].message（主 LLM 客户端）。 */
     private JsonNode postChat(Map<String, Object> body) {
-        JsonNode resp = webClient.post()
+        return postChat(webClient, apiKey, body);
+    }
+
+    /** 发送 /chat/completions 请求并返回 choices[0].message（可指定客户端与密钥，供视觉模型复用）。 */
+    private JsonNode postChat(WebClient client, String key, Map<String, Object> body) {
+        JsonNode resp = client.post()
                 .uri("/chat/completions")
-                .header("Authorization", "Bearer " + apiKey)
+                .header("Authorization", "Bearer " + key)
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(JsonNode.class)

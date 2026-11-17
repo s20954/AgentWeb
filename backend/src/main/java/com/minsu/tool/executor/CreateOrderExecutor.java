@@ -60,12 +60,23 @@ public class CreateOrderExecutor extends AbstractToolExecutor {
             throw new ToolException(ToolErrorType.PARAM_INVALID,
                     "离店日期必须晚于入住日期，请修正（retryable）。");
         }
+        // 上限校验（2026-11-17）：极端日期（如离店 9999 年）会让 nights 达数百万，
+        // 强转 int 后乘法溢出成负数、写入负金额订单。限制单次最多 30 晚。
+        if (nights > 30) {
+            throw new ToolException(ToolErrorType.PARAM_INVALID,
+                    "单次预订最多 30 晚，当前 " + nights + " 晚超出范围，请修正（retryable）。");
+        }
 
-        // 计算总价（与 quote_price 一致）
-        int roomFee = room.basePrice() * (int) nights;
-        int cleaning = 80;
-        int service = (int) Math.round(roomFee * 0.10);
-        int total = roomFee + cleaning + service;
+        // 计算总价（与 quote_price 一致）：先按 long 计算再收窄，杜绝 int 溢出
+        long roomFeeL = (long) room.basePrice() * nights;
+        long cleaningL = 80;
+        long serviceL = Math.round(roomFeeL * 0.10);
+        long totalL = roomFeeL + cleaningL + serviceL;
+        if (totalL > Integer.MAX_VALUE) {
+            throw new ToolException(ToolErrorType.PARAM_INVALID,
+                    "金额超出可处理范围，请缩短入住天数（retryable）。");
+        }
+        int total = (int) totalL;
 
         // 幂等：同 idempotencyKey 返回同一订单
         OrderStore.Order order = orderStore.create(userId, roomId, checkIn, checkOut, guestsVal, total, idempotencyKey);

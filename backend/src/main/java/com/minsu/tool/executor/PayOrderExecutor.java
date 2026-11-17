@@ -40,19 +40,28 @@ public class PayOrderExecutor extends AbstractToolExecutor {
             throw new ToolException(ToolErrorType.BUSINESS_REJECT,
                     "无权操作订单 " + orderId + "，请确认是否为本人订单（不重试）。");
         }
-        if (order.status() == OrderStore.Status.CANCELLED) {
+        // 注意：此处不提前按 get() 的状态拒绝 CANCELLED——get 与 pay 非原子（TOCTOU）。
+        // 先做鉴权，再以原子 pay() 的返回状态为唯一判定依据。
+
+        OrderStore.Order paid = orderStore.pay(orderId);
+        if (paid == null) {
+            throw new ToolException(ToolErrorType.BUSINESS_REJECT,
+                    "订单 " + orderId + " 不存在，无法支付，请核对订单号（不重试）。");
+        }
+        // 以原子支付后的真实状态为准：并发下若订单已被取消，pay() 原样返回 CANCELLED，
+        // 这里必须拒绝，绝不能出现「status=CANCELLED 却 paid=true/支付成功」的自相矛盾结果。
+        if (paid.status() == OrderStore.Status.CANCELLED) {
             throw new ToolException(ToolErrorType.BUSINESS_REJECT,
                     "订单 " + orderId + " 已取消，无法支付，请重新下单（不重试）。");
         }
-
-        OrderStore.Order paid = orderStore.pay(orderId);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("orderId", paid.orderId());
         data.put("roomId", paid.roomId());
         data.put("total", paid.totalAmount());
         data.put("status", paid.status().name());
-        data.put("paid", true);
+        // paid 由真实状态派生（CONFIRMED 才为 true），不再硬编码
+        data.put("paid", paid.status() == OrderStore.Status.CONFIRMED);
 
         return ToolResult.ok(toolName(), data, "支付成功，订单已确认；可用 get_order 查最新状态");
     }

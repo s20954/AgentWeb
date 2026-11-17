@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import { webSearch } from '@/api/search'
@@ -26,6 +26,12 @@ onMounted(() => {
 /** 联网搜索开关（输入框旁，DeepSeek 风格）。 */
 const webSearchOn = ref(false)
 const searching = ref(false)
+/** 组件是否仍挂载：切页后置 false，打字机/延时回调据此提前退出，不写已卸载页面状态。 */
+let mounted = true
+onUnmounted(() => {
+  mounted = false
+  store.abortActive() // 中止在途 SSE，防止后台继续刷 Pinia 消息
+})
 
 /** 语音 / 看图选房识别结果填入输入框（不自动发送，用户可改后手动回车）。 */
 function fillInput(text: string): void {
@@ -45,7 +51,9 @@ async function handleSend(text: string, webSearch: boolean): Promise<void> {
 async function doSearch(q: string): Promise<void> {
   if (!q || searching.value) return
   searching.value = true
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  // 延时/打字机在卸载或清空后提前退出，避免继续写全局 store
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+  const alive = () => mounted && store.messages.some((m) => m.id === agentId)
 
   // 1. 用户消息上屏（与普通对话一致）
   store.messages.push({ id: `u-${Date.now()}`, role: 'user', content: q })
@@ -53,34 +61,32 @@ async function doSearch(q: string): Promise<void> {
   // 2. 先建空 Agent 消息（streaming 态），思考链随进度逐步追加
   const agentId = `search-${Date.now()}`
   store.messages.push({ id: agentId, role: 'agent', content: '', streaming: true, steps: [] })
-  // 通过 store 内的响应式元素更新（直接改局部对象引用 Vue 检测不到）
-  const agentMsg = () => store.messages.find((m) => m.id === agentId)!
-  agentMsg().steps = [{ type: 'EXTRACTING', message: `理解需求「${q}」…` }]
+  // 通过 store 内的响应式元素更新（直接改局部对象引用 Vue 检测不到）；判空防清空后解引用崩溃
+  const agentMsg = () => store.messages.find((m) => m.id === agentId)
+  const setFirstStep = () => { const m = agentMsg(); if (m) m.steps = [{ type: 'EXTRACTING', message: `理解需求「${q}」…` }] }
+  setFirstStep()
 
   try {
     const resp = await webSearch(q, store.sessionId)
+    if (!alive()) return // 卸载/清空后停止更新
 
     // 关键信息不全 → 后端在追问：展示「识别缺口 → 带着方案问」，然后输出问题
     if (resp.needClarification) {
-      agentMsg().steps = [
-        ...agentMsg().steps!,
-        { type: 'GAP_FOUND', message: `识别到关键信息缺口：${(resp.missingFields || []).join('、')}` },
-      ]
-      await sleep(400)
-      agentMsg().steps = [...agentMsg().steps!, { type: 'ASKING', message: '信息不全，先向你确认，再出方案' }]
-      await sleep(400)
-      await typewriter(agentMsg, resp.answer || '需要补充一些信息。')
+      const m = agentMsg(); if (!m) return
+      m.steps = [...(m.steps ?? []), { type: 'GAP_FOUND', message: `识别到关键信息缺口：${(resp.missingFields || []).join('、')}` }]
+      await sleep(400); if (!alive()) return
+      const m2 = agentMsg(); if (m2) m2.steps = [...(m2.steps ?? []), { type: 'ASKING', message: '信息不全，先向你确认，再出方案' }]
+      await sleep(400); if (!alive()) return
+      await typewriter(agentMsg, resp.answer || '需要补充一些信息。', alive)
       return
     }
 
     // 信息齐全 → 依次补「是否联网」「整合」两步，带小延时让过程可见
-    agentMsg().steps = [
-      ...agentMsg().steps!,
-      { type: 'FILTERING', message: resp.primarySource === 'kb' ? '知识库已命中，无需联网' : '知识库未命中，转联网搜索…' },
-    ]
-    await sleep(350)
-    agentMsg().steps = [...agentMsg().steps!, { type: 'PACKAGING', message: '整合知识库与联网结果…' }]
-    await sleep(400)
+    const m3 = agentMsg(); if (!m3) return
+    m3.steps = [...(m3.steps ?? []), { type: 'FILTERING', message: resp.primarySource === 'kb' ? '知识库已命中，无需联网' : '知识库未命中，转联网搜索…' }]
+    await sleep(350); if (!alive()) return
+    const m4 = agentMsg(); if (m4) m4.steps = [...(m4.steps ?? []), { type: 'PACKAGING', message: '整合知识库与联网结果…' }]
+    await sleep(400); if (!alive()) return
 
     let content: string
     if (resp.error) {
@@ -91,21 +97,27 @@ async function doSearch(q: string): Promise<void> {
         content += `\n\n_来源：${resp.sources.join(' + ')}_`
       }
     }
-    await typewriter(agentMsg, content)
+    await typewriter(agentMsg, content, alive)
   } catch {
-    agentMsg().content = '（智能检索请求失败，请稍后重试）'
+    const m = agentMsg(); if (m) m.content = '（智能检索请求失败，请稍后重试）'
   } finally {
-    agentMsg().streaming = false
+    const m = agentMsg(); if (m) m.streaming = false
     searching.value = false
   }
 }
 
-/** 打字机式流式输出：逐段把内容追加到指定消息。 */
-async function typewriter(agentMsg: () => { content: string }, content: string): Promise<void> {
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/** 打字机式流式输出：逐段把内容追加到指定消息；卸载/清空后提前退出。 */
+async function typewriter(
+  agentMsg: () => { content: string } | undefined,
+  content: string,
+  isAlive: () => boolean,
+): Promise<void> {
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
   const CHUNK = 12
   for (let i = 0; i < content.length; i += CHUNK) {
-    agentMsg().content += content.slice(i, i + CHUNK)
+    if (!isAlive()) return
+    const m = agentMsg(); if (!m) return
+    m.content += content.slice(i, i + CHUNK)
     await sleep(24)
   }
 }

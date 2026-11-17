@@ -49,7 +49,10 @@ export async function streamChat(
   message: string,
   sessionId: string,
   handlers: StreamHandlers,
+  signal?: AbortSignal,
 ): Promise<void> {
+  // 主动中止（清空对话/切页）属正常收尾，不当错误上报
+  const aborted = () => signal?.aborted === true
   // fetch 本身必须包进 try：后端重启/代理断开时 fetch 直接 reject，
   // 不捕获会绕过 onError 让调用方陷入永久 loading（界面卡死、控制台报 net::ERR_ABORTED）
   let res: Response
@@ -62,8 +65,10 @@ export async function streamChat(
         'X-User-Id': getOrCreateUserId(),
       },
       body: JSON.stringify({ message, sessionId }),
+      signal,
     })
   } catch (e) {
+    if (aborted()) return // 主动中止，静默返回
     handlers.onError?.(e instanceof Error ? e.message : String(e))
     return
   }
@@ -81,6 +86,11 @@ export async function streamChat(
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+      if (aborted()) {
+        // 主动中止：取消底层流读取，释放连接（不触发 onError）
+        try { await reader.cancel() } catch { /* 已断开，忽略 */ }
+        return
+      }
       buffer += decoder.decode(value, { stream: true })
 
       // SSE 事件以空行分隔（一个事件可能跨 chunk，按 \n\n 切分，余量留在 buffer）
@@ -92,6 +102,7 @@ export async function streamChat(
       }
     }
   } catch (e) {
+    if (aborted()) return // 主动中止，静默返回
     handlers.onError?.(e instanceof Error ? e.message : String(e))
   }
 }

@@ -29,9 +29,20 @@ export const useChatStore = defineStore('chat', () => {
    */
   const lastCards = ref<RoomCard[]>([])
 
+  /** 当前流式请求的 AbortController（清空对话/卸载时中止，防残留 chunk 写已清空的消息）。 */
+  let activeAbort: AbortController | null = null
+
   /** 生成会话 ID（本地随机，页面存活期间不变）。 */
   function genSessionId(): string {
     return 'web-' + Math.random().toString(36).slice(2, 10)
+  }
+
+  /** 中止当前进行中的流式请求（幂等）。 */
+  function abortActive(): void {
+    if (activeAbort) {
+      activeAbort.abort()
+      activeAbort = null
+    }
   }
 
   /** 发送一条用户消息并流式接收 Agent 回复。 */
@@ -53,59 +64,81 @@ export const useChatStore = defineStore('chat', () => {
     })
     // 关键：通过 messages.value 里的元素（响应式 proxy）更新，而不是改局部对象引用，
     // 否则 Vue 3 深层响应式检测不到局部变量的属性变化，界面不更新。
-    const agentMsg = () => messages.value.find((m) => m.id === agentId)!
+    // 修复：不再用非空断言！用户流式中点「清空对话」后 find 返回 undefined，
+    // 直接解引用会抛 TypeError（且 onError 内二次抛）。改为判空，消息不在就静默丢弃流片段。
+    const agentMsg = () => messages.value.find((m) => m.id === agentId)
 
-    // 3. 清空上一轮思考链，进入加载态
+    // 3. 清空上一轮思考链，进入加载态；建立本轮取消控制器
     activeSteps.value = []
     loading.value = true
+    abortActive()
+    const controller = new AbortController()
+    activeAbort = controller
 
-    await streamChat(trimmed, sessionId.value, {
-      onStep: (event) => {
-        // 思考链步骤去重（同 type 可能重复，取最新）
-        const existing = activeSteps.value.findIndex((s) => s.type === event.type)
-        if (existing >= 0) {
-          activeSteps.value[existing] = event
-        } else {
-          activeSteps.value.push(event)
-        }
-        // 同步到 Agent 消息的 steps
-        agentMsg().steps = [...activeSteps.value]
-
-        // DECIDING 步骤携带结构化房源 payload → 存到消息上，供卡片式多方案对比渲染
-        if (event.type === 'DECIDING' && event.payload) {
-          const p = event.payload as { rooms?: RoomCard[]; checkIn?: string; checkOut?: string; guests?: number }
-          if (Array.isArray(p.rooms)) {
-            agentMsg().cards = p.rooms
-            lastCards.value = p.rooms
+    try {
+      await streamChat(trimmed, sessionId.value, {
+        onStep: (event) => {
+          const msg = agentMsg()
+          if (!msg) return // 消息已被清空，丢弃该事件
+          // 思考链步骤去重（同 type 可能重复，取最新）
+          const existing = activeSteps.value.findIndex((s) => s.type === event.type)
+          if (existing >= 0) {
+            activeSteps.value[existing] = event
+          } else {
+            activeSteps.value.push(event)
           }
-          if (p.checkIn && p.checkOut) {
-            agentMsg().booking = { checkIn: p.checkIn, checkOut: p.checkOut, guests: p.guests ?? 2 }
-          }
-        }
-      },
-      onText: (chunk) => {
-        agentMsg().content += chunk
-      },
-      onDone: () => {
-        agentMsg().streaming = false
-        loading.value = false
-      },
-      onError: (err) => {
-        if (!agentMsg().content) {
-          agentMsg().content = `（出错了：${err}）`
-        }
-        agentMsg().streaming = false
-        loading.value = false
-      },
-    })
+          // 同步到 Agent 消息的 steps
+          msg.steps = [...activeSteps.value]
 
-    // 兜底：异常未触发 onDone/onError 时收尾
-    agentMsg().streaming = false
-    loading.value = false
+          // DECIDING 步骤携带结构化房源 payload → 存到消息上，供卡片式多方案对比渲染
+          if (event.type === 'DECIDING' && event.payload) {
+            const p = event.payload as { rooms?: RoomCard[]; checkIn?: string; checkOut?: string; guests?: number }
+            if (Array.isArray(p.rooms)) {
+              msg.cards = p.rooms
+              lastCards.value = p.rooms
+            }
+            if (p.checkIn && p.checkOut) {
+              msg.booking = { checkIn: p.checkIn, checkOut: p.checkOut, guests: p.guests ?? 2 }
+            }
+          }
+          // 结构化订单结果：下单/支付工具成功时下发 kind=order_result
+          const op = event.payload as { kind?: string }
+          if (op.kind === 'order_result') {
+            msg.order = event.payload as import('@/types/chat').OrderResult
+          }
+        },
+        onText: (chunk) => {
+          const msg = agentMsg()
+          if (!msg) return
+          msg.content += chunk
+        },
+        onDone: () => {
+          const msg = agentMsg()
+          if (msg) msg.streaming = false
+          loading.value = false
+        },
+        onError: (err) => {
+          const msg = agentMsg()
+          if (!msg) return
+          if (!msg.content) {
+            msg.content = `（出错了：${err}）`
+          }
+          msg.streaming = false
+          loading.value = false
+        },
+      }, controller.signal)
+    } finally {
+      // 兜底收尾：无论正常结束/异常/中止都清理加载态与本轮控制器
+      const msg = agentMsg()
+      if (msg) msg.streaming = false
+      loading.value = false
+      if (activeAbort === controller) activeAbort = null
+    }
   }
 
   /** 清空对话（保留 sessionId 以便继续同会话，或可选重置）。 */
   function reset(): void {
+    abortActive() // 先中止在途 SSE，杜绝后续 chunk 写已清空的消息
     messages.value = []
     activeSteps.value = []
     loading.value = false
@@ -166,5 +199,5 @@ export const useChatStore = defineStore('chat', () => {
     URL.revokeObjectURL(url)
   }
 
-  return { messages, activeSteps, loading, sessionId, lastCards, send, reset, toMarkdown, exportMarkdown }
+  return { messages, activeSteps, loading, sessionId, lastCards, send, reset, abortActive, toMarkdown, exportMarkdown }
 })

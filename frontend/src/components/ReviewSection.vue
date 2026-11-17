@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { Review } from '@/mock/data'
 import StarRating from './StarRating.vue'
 
@@ -38,13 +38,12 @@ function submit(): void {
   }, 200)
 }
 
-/** 平均分 */
-const avg = computedAvg()
-function computedAvg(): string {
+/** 平均分（响应式：新增评价/切换房源后自动重算）。 */
+const avg = computed(() => {
   if (!props.reviews.length) return '—'
   const sum = props.reviews.reduce((acc, r) => acc + r.score, 0)
   return (sum / props.reviews.length).toFixed(1)
-}
+})
 </script>
 
 <template>

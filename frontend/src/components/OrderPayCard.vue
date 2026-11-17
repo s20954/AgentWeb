@@ -4,26 +4,36 @@ import { payOrder } from '@/api/tools'
 import { getOrCreateUserId } from '@/api/chat'
 import { useUserDataStore } from '@/stores/userData'
 import { useChatStore } from '@/stores/chat'
-import type { RoomCard } from '@/types/chat'
+import type { RoomCard, OrderResult } from '@/types/chat'
 
 const props = defineProps<{
   /** Agent 回复文本（下单后含订单号 MS...） */
   content: string
   /** 后端下发的房源卡片（roomId→title/cover 映射），用于反查真实民宿名与图片。 */
   cards?: RoomCard[]
+  /** 结构化订单结果（下单/支付成功后下发），优先于从文本正则抠字段。 */
+  order?: OrderResult
 }>()
 
 const userData = useUserDataStore()
 const chatStore = useChatStore()
 
-/** 从文本中提取订单号（格式 MS<时间戳>-<序号>）。 */
+/** 订单号：优先结构化 order，回退从文本正则提取（格式 MS<时间戳>-<序号>）。 */
 const orderId = computed(() => {
+  if (props.order?.orderId) return props.order.orderId
   const m = props.content.match(/MS\d{10,}-\d+/)
   return m ? m[0] : ''
 })
 
-/** 是否处于「待支付」状态（含订单号 + 待支付字眼才显示支付按钮）。 */
-const isPending = computed(() => orderId.value !== '' && props.content.includes('待支付'))
+/** 是否处于「待支付」状态：优先用结构化 status/paid，回退文本「待支付」字眼。 */
+const isPending = computed(() => {
+  if (orderId.value === '') return false
+  if (props.order?.status) {
+    // PENDING_PAYMENT = 待支付；CONFIRMED/CANCELLED 都不是
+    return props.order.status === 'PENDING_PAYMENT'
+  }
+  return props.content.includes('待支付')
+})
 
 /** 支付状态：null=未支付，'paying'=支付中，'paid'=已支付，'error'=失败 */
 const payState = ref<'paying' | 'paid' | 'error' | null>(null)
@@ -60,8 +70,9 @@ const resolvedRoom = computed<RoomCard | null>(() => {
   return cards[0] ?? null
 })
 
-/** 提取民宿标题：优先反查卡片，其次文本【】/「」/「房源：」，最后才回退默认文案。 */
+/** 提取民宿标题：优先结构化 order.title，其次反查卡片，再其次文本格式，最后回退默认文案。 */
 function extractTitle(): string {
+  if (props.order?.title) return props.order.title
   const room = resolvedRoom.value
   if (room?.title) return room.title
   // 「房源：老街里·白墙小院（庾村 · 原木）」这类下单成功文本
@@ -74,16 +85,18 @@ function extractTitle(): string {
   return '民宿订单'
 }
 
-/** 提取民宿封面图：优先卡片 cover，其次文本里的图片 URL。 */
+/** 提取民宿封面图：优先结构化 order.cover，其次卡片 cover，再其次文本图片 URL。 */
 function extractImage(): string {
+  if (props.order?.cover) return props.order.cover
   const room = resolvedRoom.value
   if (room?.cover) return room.cover
   const m = props.content.match(/https?:\/\/[^\s)）]+\.(?:jpg|jpeg|png|webp)/i)
   return m ? m[0] : ''
 }
 
-/** 从订单文本提取总价（如「总价：**1224 元**」或「1224 元」）。 */
+/** 总价：优先结构化 order.total，回退文本正则。 */
 function extractTotal(): number {
+  if (typeof props.order?.total === 'number') return props.order.total
   const m = props.content.match(/(?:总价|合计)[^\d]*(\d+)\s*元/)
   if (m) return Number(m[1])
   const m2 = props.content.match(/(\d{3,})\s*元/)
@@ -107,6 +120,11 @@ function extractDates(): { checkIn: string; checkOut: string; nights: number } {
  * 避免「退出再进又变回待支付」。
  */
 onMounted(() => {
+  // 结构化状态直接决定：已确认视为已支付
+  if (props.order?.status === 'CONFIRMED' || props.order?.paid === true) {
+    payState.value = 'paid'
+    return
+  }
   if (!orderId.value) return
   const existing = userData.orders.find((o) => o.orderId === orderId.value)
   if (existing && existing.status !== '待支付') {

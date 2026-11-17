@@ -50,6 +50,20 @@ export interface ChatMessage {
   cards?: RoomCard[]
   /** 预订上下文（同一 DECIDING 步骤随卡片下发，供「帮我报价」按钮调用 quote_price）。 */
   booking?: BookingContext
+  /** 结构化订单结果（下单/支付工具成功后随 TOOL_CALLING 步骤下发，供订单卡片按字段渲染）。 */
+  order?: OrderResult
+}
+
+/** 结构化订单结果（对齐后端 create_order/pay_order 的 data + kind=order_result）。 */
+export interface OrderResult {
+  kind: 'order_result'
+  orderId: string
+  roomId?: string
+  total?: number
+  status?: string
+  paid?: boolean
+  title?: string
+  cover?: string
 }
 
 /** 预订上下文：报价/下单所需的入住信息。 */
