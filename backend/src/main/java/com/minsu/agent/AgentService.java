@@ -119,15 +119,30 @@ public class AgentService {
         sink.step(StepEvent.of(StepEventType.EXTRACTING, summarizeExtracted(state)));
 
         // ---- 交易/订单意图优先路由（E2E 实测修复）----
-        // 看价/下单/查单/取消是真实工具操作，必须走 LLM 工具调用轨道执行；
+        // 看价/下单/查单/取消/支付是真实工具操作，必须走 LLM 工具调用轨道执行；
         // 若放在缺口追问/规则轨道之后，三要素一旦齐全会话会被锁死在规则筛选里，
         // 用户说「yg-001 多少钱」「就订这套」「退了吧」全部失灵（报价/下单成假动作）。
+        // 注意：交易意图必须先于「候选聚焦」路由，否则「就订候选1」会被候选聚焦误拦截成「介绍候选1」。
         if (llmClient.isConfigured() && isTransactionIntent(userInput)) {
             sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "识别到报价/订单操作，让我调工具处理…"));
             String txAnswer = runLlmToolLoop(userId, userInput, state, history, sink);
             sink.text(txAnswer);
             conversationMemory.appendTurn(sessionId, userInput, txAnswer);
             return txAnswer;
+        }
+
+        // ---- 候选聚焦/详细介绍意图路由（E2E 实测修复）----
+        // 上一轮已给出候选列表，本轮用户说「我选候选2 / 详细讲讲第3套」时，
+        // 若落到规则轨道会重复整轮筛选、原样重发同一批候选（用户错觉「回复的又是第一题」）。
+        // 这里识别「候选 N」并映射成 roomId，直接用房源数据 + RAG 知识做单套详细介绍。
+        // 纯规则实现（不依赖 LLM），避免 LLM 402 降级时又退回整批推荐。
+        String focusRoomId = resolveCandidateRoomId(userInput, state);
+        if (focusRoomId != null) {
+            sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "识别到你在了解某套房源详情，让我查一下…"));
+            String focusAnswer = buildRoomFocusAnswer(focusRoomId, state);
+            sink.text(focusAnswer);
+            conversationMemory.appendTurn(sessionId, userInput, focusAnswer);
+            return focusAnswer;
         }
 
         // ---- 目的地覆盖校验（先于缺口追问）：数据层只有莫干山，其它目的地诚实告知「暂无房源」 ----
@@ -161,6 +176,14 @@ public class AgentService {
         // ---- 第 5 步：双轨 —— 规则筛选 或 LLM 自主工具调用 ----
         // 判断：需求是否超出规则覆盖范围（软性/知识性/偏好类，如带宠物、要温泉、问政策）
         boolean softDemand = isSoftDemand(state, userInput);
+        // 知识问答类（景点/攻略/政策等纯咨询）→ 纯 RAG 兜底，不依赖 LLM，避免 402 降级回订房
+        if (isKnowledgeQuery(userInput)) {
+            sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "这个问题我查一下本地知识库…"));
+            String kbAnswer = buildKnowledgeAnswer(userInput, state);
+            sink.text(kbAnswer);
+            conversationMemory.appendTurn(sessionId, userInput, kbAnswer);
+            return kbAnswer;
+        }
         if (softDemand && llmClient.isConfigured()) {
             // 轨道 B：LLM 自主工具调用（真 Function Calling）
             sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "让我自主判断该查什么、该调哪个工具…"));
@@ -594,6 +617,122 @@ public class AgentService {
     private static final java.util.regex.Pattern ROOM_ID_PATTERN = java.util.regex.Pattern
             .compile("(?i)[a-z]{2,6}\\s*-\\s*\\d{2,4}");
 
+    /** 候选序号正则：匹配「候选2 / 候选 2 / 第3套 / 第二套 / 选 2 / 选第二套」里的序号。 */
+    private static final java.util.regex.Pattern CANDIDATE_INDEX_PATTERN = java.util.regex.Pattern
+            .compile("(?:候选|第)\\s*([一二三四五六七八九十0-9]+)\\s*(?:套|个)?|选\\s*([一二三四五六七八九十0-9]+)\\s*(?:套|这|那)");
+
+    /** 候选聚焦信号词：单说「候选/第N套/详细介绍/介绍一下」才算聚焦，「选N」须带套/这/那，避免「选一下」等口语误伤。 */
+    private static final java.util.regex.Pattern CANDIDATE_FOCUS_PATTERN = java.util.regex.Pattern
+            .compile("候选|第[一二三四五六七八九十0-9]+套|详细介绍|详细讲讲|介绍一下|选[一二三四五六七八九十0-9]+\\s*(?:套|这|那)");
+
+    /**
+     * 解析「候选 N / 第 N 套 / 选 N」→ 对应候选的 roomId。
+     *
+     * <p>前提：当前会话 state 里已有上一轮筛出的候选列表（{@code state.getCandidates()}）。
+     * 用户在上一轮推荐基础上说「我选候选2」或「详细讲讲第3套」，本质是聚焦某套已给出的房源，
+     * 不该重新跑一遍筛选（否则会原样重发同一批候选，产生「回复的又是第一题」的错觉）。
+     * 命中则返回该候选的 roomId，交给 LLM 工具循环用 ask_house_info 做单套详细介绍。
+     *
+     * @return 命中候选序号且该序在候选列表内时返回 roomId；否则返回 null（走原流程）
+     */
+    String resolveCandidateRoomId(String input, AgentState state) {
+        if (input == null || input.isBlank()) {
+            return null;
+        }
+        List<Map<String, Object>> candidates = state.getCandidates();
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
+        // 命中聚焦信号词才算聚焦意图（否则「选」字可能出现在别的语义里）
+        if (!CANDIDATE_FOCUS_PATTERN.matcher(input).find()) {
+            return null;
+        }
+        java.util.regex.Matcher m = CANDIDATE_INDEX_PATTERN.matcher(input);
+        if (!m.find()) {
+            return null;
+        }
+        // 取第一个非空捕获组（候选/第 的序号，或「选」后的序号）
+        String idxStr = null;
+        for (int g = 1; g <= m.groupCount(); g++) {
+            if (m.group(g) != null) {
+                idxStr = m.group(g);
+                break;
+            }
+        }
+        if (idxStr == null) {
+            return null;
+        }
+        int idx = parseChineseNumber(idxStr);
+        if (idx < 1 || idx > candidates.size()) {
+            // 序号越界（如「候选8」但只有3套）：返回 null，交给原流程/LLM 兜底说明
+            return null;
+        }
+        Map<String, Object> target = candidates.get(idx - 1);
+        Object roomId = target.get("roomId");
+        return roomId == null ? null : roomId.toString();
+    }
+
+    /** 把「一/二/三…十/1/2/3…」转成 int；无法解析返回 -1。 */
+    private int parseChineseNumber(String s) {
+        if (s == null || s.isBlank()) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (NumberFormatException ignored) {
+            // 中文数字
+        }
+        return switch (s.trim()) {
+            case "一" -> 1;
+            case "二" -> 2;
+            case "三" -> 3;
+            case "四" -> 4;
+            case "五" -> 5;
+            case "六" -> 6;
+            case "七" -> 7;
+            case "八" -> 8;
+            case "九" -> 9;
+            case "十" -> 10;
+            default -> -1;
+        };
+    }
+
+    /**
+     * 针对某套候选房源生成聚焦的详细介绍（纯规则 + RAG，不依赖 LLM）。
+     *
+     * <p>背景（2026-11-17 E2E）：用户说「我选候选2，详细讲讲」，原实现无此意图路由，
+     * 落到规则轨道原样重发整批推荐。且即便路由到 LLM，若 LLM 402 降级也会退回整批推荐。
+     * 故这里直接取房源数据 + 片区知识拼装单套详情，保证「聚焦某套」这一意图在任何情况下都成立。
+     */
+    private String buildRoomFocusAnswer(String roomId, AgentState state) {
+        com.minsu.tool.executor.Room room = roomStore.byId(roomId);
+        if (room == null) {
+            return "抱歉，我这边没找到这套房源的详情，你可以重新说下想了解哪一套。";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("好的，专门讲讲这一套——\n\n");
+        sb.append("【").append(room.title()).append("】").append("（").append(room.area()).append(" · ")
+          .append(room.style()).append("）\n");
+        sb.append("定位：").append(room.positioning()).append("\n");
+        sb.append("价格：").append(room.basePrice()).append(" 元/晚起\n");
+        sb.append("适合你：").append(room.fitReason()).append("\n");
+        sb.append("要注意：").append(room.drawback()).append("\n");
+
+        // 拼片区知识（RAG 检索该目的地+片区的介绍，命中则附上，增强「详细」感）
+        String query = (state.getDestination() == null ? "" : state.getDestination())
+                + " " + room.area() + " " + room.style();
+        List<RagService.Hit> hits = ragService.search(query, 2);
+        if (!hits.isEmpty() && hits.get(0).score() >= 0.05) {
+            sb.append("\n片区补充：\n");
+            for (RagService.Hit h : hits) {
+                sb.append("· ").append(h.content()).append("\n");
+            }
+        }
+
+        sb.append("\n需要的话，我可以直接对这套报价（含清洁费/服务费的总价），你看完再决定订不订。");
+        return sb.toString();
+    }
+
     /**
      * 判断是否为交易/订单意图（看价 / 下单 / 查单 / 取消）。
      *
@@ -648,20 +787,83 @@ public class AgentService {
      *   <li>偏好/体验类：想泡私汤、要能看云海、周边有什么吃的</li>
      *   <li>无明确三要素但仍想获得建议的开放式需求</li>
      * </ul>
+     *
+     * <p><b>关键顺序（2026-11-17 E2E 修复）</b>：必须先判断「是否命中知识/偏好关键词」，
+     * 再判断三要素。用户问「成都有什么景点」「周边有什么吃的」这类咨询，与会话里是否已凑齐
+     * 三要素无关——即便已订好房，用户照样会问景点攻略。若先判 {@code hasMandatoryInfo()}
+     * 短路，这类问题会被锁死在规则筛选轨道，重跑一遍房源推荐（用户错觉「问景点却答订房」）。
      */
     private boolean isSoftDemand(AgentState state, String userInput) {
-        // 硬交易意图（已具备三要素或明确要找房）→ 规则轨道
-        if (state.hasMandatoryInfo()) {
-            return false;
-        }
-        // 命中软性/知识性关键词 → LLM 自主工具调用轨道
+        // 命中软性/知识性关键词 → 无条件进入 LLM 自主工具调用轨道（先于三要素判断）
         for (String kw : List.of("宠物", "狗", "猫", "退房", "发票", "开票", "停车", "温泉", "私汤",
-                "云海", "日出", "吃", "餐", "玩", "徒步", "附近", "周边", "政策", "能", "可以", "有没有", "几点")) {
+                "云海", "日出", "吃", "餐", "玩", "徒步", "附近", "周边", "政策", "能", "可以", "有没有", "几点",
+                "景点", "景区", "攻略", "旅游", "游", "逛", "打卡", "网红", "博物馆", "古镇", "特色")) {
             if (userInput != null && userInput.contains(kw)) {
                 return true;
             }
         }
+        // 硬交易意图（已具备三要素且无知识/偏好关键词）→ 规则轨道
+        if (state.hasMandatoryInfo()) {
+            return false;
+        }
         return false;
+    }
+
+    /** 知识问答类关键词：纯咨询（景点/攻略/政策/玩法），与「找房」无关，直接 RAG 回答。 */
+    private static final List<String> KNOWLEDGE_QUERY_KEYWORDS = List.of(
+            "景点", "景区", "攻略", "旅游", "打卡", "博物馆", "古镇", "特色",
+            "有什么好", "有什么好玩", "哪里好玩", "怎么玩", "吃什么", "小吃", "美食", "特产",
+            "交通", "怎么去", "地铁", "天气", "门票", "开放时间", "几点");
+
+    /**
+     * 判断是否为「纯知识问答」意图（问景点/攻略/玩法/政策等），应走 RAG 直接回答，
+     * 而非当成找房需求跑规则筛选。独立于 {@link #isSoftDemand}，先于规则筛选执行，
+     * 不依赖 LLM（避免 LLM 402 时降级回订房）。
+     */
+    private boolean isKnowledgeQuery(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        for (String kw : KNOWLEDGE_QUERY_KEYWORDS) {
+            if (input.contains(kw)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 纯 RAG 知识问答：用用户问题 + 目的地检索知识库，命中则拼成回答。
+     * 无命中时给诚实兜底，不编造、不转去订房。
+     */
+    private String buildKnowledgeAnswer(String userInput, AgentState state) {
+        // 检索 query：优先用户原句，叠加上下文目的地，提高召回率
+        String dest = state.getDestination();
+        String query = userInput + (dest == null ? "" : " " + dest);
+        List<RagService.Hit> hits = ragService.search(query, 3);
+
+        // 过滤低分命中，避免硬凑
+        List<RagService.Hit> valid = new ArrayList<>();
+        for (RagService.Hit h : hits) {
+            if (h.score() >= 0.05) {
+                valid.add(h);
+            }
+        }
+
+        if (valid.isEmpty()) {
+            return "关于「" + userInput + "」，我这边暂时没有对应的详细攻略。"
+                    + "我可以帮你：\n"
+                    + "1. 换成推荐房源，帮你把住宿先定下来；\n"
+                    + "2. 告诉我你更关注哪方面（吃什么/怎么玩/带娃），我再针对性补充。";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("帮你查了一下「").append(userInput).append("」：\n\n");
+        for (RagService.Hit h : valid) {
+            sb.append("· ").append(h.content()).append("\n");
+        }
+        sb.append("\n如果你想把住宿也一起定下来，告诉我日期和预算，我马上帮你筛。");
+        return sb.toString();
     }
 
     /**

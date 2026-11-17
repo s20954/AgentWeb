@@ -308,6 +308,30 @@ class AgentServiceTest {
     }
 
     @Test
+    void orderIntentWithCandidateIndexRoutesToToolLoopNotFocus() {
+        // 回归背景（2026-11-17 E2E）：交易意图路由原排在候选聚焦路由之后，
+        // 「就订候选1」被候选聚焦误拦截成「介绍候选1」，导致下单失灵。
+        // 修复后：交易意图（就订）优先于候选聚焦，应走 LLM 工具轨道调 create_order。
+        AgentService svc = agentWith(scriptedToolLlm("create_order",
+                "{\"roomId\":\"cd-001\",\"checkIn\":\"2026-11-01\",\"checkOut\":\"2026-11-03\",\"guests\":2,\"idempotencyKey\":\"tx-focus-1\"}",
+                "订好了，订单 MS123456 已创建，待支付。"));
+        // 第一轮：成都完整信息 → 规则轨道出候选
+        String t1 = svc.run("txfocus", "成都，11月1日到3日，预算每晚800，情侣", sink());
+        assertTrue(t1.contains("候选"), "首轮应出候选");
+
+        steps.clear();
+        texts.clear();
+
+        // 第二轮：「就订候选1」→ 应走交易轨道（create_order），而非候选聚焦介绍
+        String t2 = svc.run("txfocus", "就订候选1", sink());
+        List<StepEventType> types = steps.stream().map(StepEvent::type).toList();
+        assertTrue(types.contains(StepEventType.TOOL_CALLING), "下单应走工具轨道");
+        assertTrue(steps.stream().anyMatch(s -> s.message() != null && s.message().contains("create_order")),
+                "应调用 create_order，实际步骤：" + steps.stream().map(StepEvent::message).toList());
+        assertFalse(t2.contains("专门讲讲"), "下单不应被聚焦介绍拦截，实际：" + t2);
+    }
+
+    @Test
     void searchIntentDoesNotTriggerToolLoop() {
         // 反向回归：普通推荐诉求（无交易词）仍应走规则轨道七步，不被误路由
         String answer = agentService.run("tx3",
@@ -383,5 +407,90 @@ class AgentServiceTest {
         String t2 = agentService.run("cd3", "改去重庆吧", sink());
         assertTrue(t2.contains("重庆"), "应识别新目的地重庆，而非残留成都，实际：" + t2);
         assertFalse(t2.contains("成都"), "不应再提成都，实际：" + t2);
+    }
+
+    // ---------------------------------------------------------------- E2E 修复：候选聚焦/详细介绍不得重走筛选
+
+    @Test
+    void candidateFocusIntentRoutesToToolLoopNotReFilter() {
+        // 回归背景（2026-11-17 E2E）：上一轮已给候选，本轮说「我选候选2，详细讲讲」，
+        // 曾落到规则轨道原样重发同一批候选（用户错觉「回复的又是第一题」）。
+        // 现改为纯规则聚焦：识别「候选2」→ 直接取对应房源做单套详细介绍，不重跑筛选。
+        // 第一轮：成都 + 完整三要素 → 规则轨道筛出候选（含 cd-002 等）
+        String t1 = agentService.run("focus1", "成都，11月20日到23日，预算每晚800，情侣", sink());
+        assertTrue(t1.contains("候选"), "第一轮应给出候选列表，实际：" + t1);
+
+        steps.clear();
+        texts.clear();
+
+        // 第二轮：聚焦候选2 → 应聚焦介绍「春熙·拾光小院」（候选2=cd-002），不得重发整批推荐
+        String t2 = agentService.run("focus1", "我选择候选2，你详细介绍下", sink());
+        List<StepEventType> types = steps.stream().map(StepEvent::type).toList();
+        assertFalse(types.contains(StepEventType.DECIDING),
+                "候选聚焦不应重走整轮推荐包装，实际步骤：" + types);
+        assertFalse(types.contains(StepEventType.FILTERING),
+                "候选聚焦不应重新筛选，实际步骤：" + types);
+        assertTrue(t2.contains("春熙·拾光小院"),
+                "应聚焦候选2的详情（候选2=春熙·拾光小院），实际：" + t2);
+        // 不应再出现「主推」或「候选 1」这类整批推荐话术
+        assertFalse(t2.contains("主推"), "聚焦介绍不应含整批推荐的主推话术，实际：" + t2);
+    }
+
+    @Test
+    void resolveCandidateRoomIdParsesOrdinalAndChinese() {
+        // 纯逻辑：候选序号解析（阿拉伯数字 + 中文数字 + 越界）
+        AgentState st = new AgentState();
+        st.setCandidates(List.of(
+                Map.of("roomId", "cd-001", "title", "A"),
+                Map.of("roomId", "cd-002", "title", "B"),
+                Map.of("roomId", "cd-003", "title", "C")));
+
+        assertEquals("cd-002", agentService.resolveCandidateRoomId("我选候选2", st));
+        assertEquals("cd-003", agentService.resolveCandidateRoomId("详细讲讲第三套", st));
+        assertEquals("cd-001", agentService.resolveCandidateRoomId("候选1详细介绍一下", st));
+        // 越界 → null（交给原流程兜底）
+        assertEquals(null, agentService.resolveCandidateRoomId("我选候选8", st));
+        // 无聚焦信号词 → null（避免「选」字误伤）
+        assertEquals(null, agentService.resolveCandidateRoomId("帮我重新选一下吧", st));
+        // 空候选 → null
+        assertEquals(null, agentService.resolveCandidateRoomId("我选候选1", new AgentState()));
+    }
+
+    // ---------------------------------------------------------------- E2E 修复：景点/攻略咨询不得答成订房
+
+    @Test
+    void sightseeingQueryAnswersWithKnowledgeNotRooms() {
+        // 回归背景（2026-11-17 E2E）：用户问「成都有什么景点」，但会话已凑齐三要素，
+        // isSoftDemand 被 hasMandatoryInfo() 短路 → 落到规则筛选重跑整批房源推荐（答非所问）。
+        // 修复后：景点/攻略类咨询直接走 RAG 知识问答，不重跑筛选、不输出房源推荐。
+        // T1：先订房场景（成都 + 完整三要素，跑出候选，模拟已订房状态）
+        String t1 = agentService.run("sight1", "成都，11月1日到3日，预算每晚800，情侣", sink());
+        assertTrue(t1.contains("候选"), "首轮应给出候选，实际：" + t1);
+
+        steps.clear();
+        texts.clear();
+
+        // T2：问景点 → 应走知识问答（TOOL_CALLING），不得重跑 FILTERING/DECIDING
+        String t2 = agentService.run("sight1", "成都有什么景点", sink());
+        List<StepEventType> types = steps.stream().map(StepEvent::type).toList();
+        assertFalse(types.contains(StepEventType.FILTERING),
+                "景点咨询不应重跑筛选，实际步骤：" + types);
+        assertFalse(types.contains(StepEventType.DECIDING),
+                "景点咨询不应重走推荐包装，实际步骤：" + types);
+        assertTrue(t2.contains("景点") || t2.contains("攻略") || t2.contains("熊猫")
+                        || t2.contains("宽窄巷子") || t2.contains("武侯祠"),
+                "应回答景点/攻略内容，实际：" + t2);
+        // 不应出现房源推荐的主推话术
+        assertFalse(t2.contains("主推"), "景点咨询不应含房源主推，实际：" + t2);
+    }
+
+    @Test
+    void knowledgeQueryWithoutDestinationStillAnswersHonestly() {
+        // 无目的地上下文的景点/攻略咨询也应走知识问答，不编造、不硬转订房
+        String answer = agentService.run("sight2", "有什么好吃的推荐", sink());
+        List<StepEventType> types = steps.stream().map(StepEvent::type).toList();
+        assertFalse(types.contains(StepEventType.FILTERING), "纯咨询不应触发筛选");
+        // 要么命中知识回答，要么诚实兜底，但不应是房源推荐
+        assertFalse(answer.contains("主推"), "纯咨询不应含房源主推，实际：" + answer);
     }
 }
