@@ -253,16 +253,23 @@ public class AgentService {
             raw = raw
                     .replaceAll("^(四川|云南|浙江|广东|江苏|山东|湖北|陕西|福建|海南|湖南|安徽)", "")
                     .replaceAll("(市|镇|县)$", "");
-            // 用停用词截断：地名之后紧跟「玩/旅游/游/度假/旅行/住/看/转/吧/啊/呀/呢/两天/三天」等即截断
+            // 用停用词截断：地名之后紧跟「玩/旅游/游/度假/旅行/住/看/转/吧/啊/呀/呢/两天/三天」等即截断。
+            // 注意 idx>=0（而非 >0）：当动词词（「游」「玩」）出现在最开头（如「去游玩」），
+            // 说明抓到的根本不是地名、而是出行动词本身，应整体判空，绝不能把「游」当目的地。
             for (String stop : List.of("旅游", "度假", "旅行", "游玩", "玩", "游", "住", "看", "转", "吧", "啊", "呀", "呢", "两天", "三天", "几天", "一晚")) {
                 int idx = raw.indexOf(stop);
-                if (idx > 0) {
+                if (idx >= 0) {
                     raw = raw.substring(0, idx);
                 }
             }
             // 截断后再清一次尾缀（截断可能露出「市/县」等）
             raw = raw.replaceAll("(市|镇|县)$", "");
             if (raw.isBlank()) {
+                return null;
+            }
+            // 纯动词/无意义词黑名单：截断后若剩下「玩/游/住/看/转」这类单个动词，
+            // 说明原句是「去玩」「去转转」这类无地名表达，不识别为目的地（否则会把动词当地名）。
+            if (raw.matches("[游玩住看转逛散]+")) {
                 return null;
             }
             return raw;
@@ -390,7 +397,8 @@ public class AgentService {
             state.setRelationship("朋友");
         } else if (input.contains("亲子") || input.contains("孩子") || input.contains("带娃") || input.contains("小孩")) {
             state.setRelationship("亲子");
-        } else if (input.contains("家庭") || input.contains("爸妈") || input.contains("父母") || input.contains("全家")) {
+        } else if (input.contains("家庭") || input.contains("爸妈") || input.contains("父母") || input.contains("全家")
+                || input.contains("一家人") || input.contains("家人") || input.contains("老小")) {
             state.setRelationship("家庭");
         }
         // 人数：显式「N人/个大人/N个小孩」优先，否则按关系推断（已有值则不覆盖）
