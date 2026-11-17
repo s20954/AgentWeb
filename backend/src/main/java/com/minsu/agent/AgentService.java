@@ -145,15 +145,18 @@ public class AgentService {
             return focusAnswer;
         }
 
-        // ---- 目的地覆盖校验（先于缺口追问）：数据层只有莫干山，其它目的地诚实告知「暂无房源」 ----
+        // ---- 目的地覆盖校验（先于缺口追问）：数据层不支持的目的地诚实告知「暂无房源」 ----
         // 放在追问之前，避免用户先说「去成都」却被要求补日期、迟迟听不到「成都没数据」的诚实答复。
         if (state.getDestination() != null && !roomStore.supportsDestination(state.getDestination())) {
             String dest = state.getDestination();
             sink.step(StepEvent.of(StepEventType.PACKAGING, "检查目的地房源覆盖…"));
-            String honest = "关于「" + dest + "」：目前我的房源库只覆盖了**莫干山**，"
+            List<String> supported = roomStore.supportedDestinations();
+            String covered = String.join("、", supported);
+            String suggested = supported.isEmpty() ? "莫干山" : supported.get(0);
+            String honest = "关于「" + dest + "」：目前我的房源库只覆盖了 **" + covered + "**，"
                     + "还没有 " + dest + " 的真实房源数据，所以没法给你靠谱的推荐——我不编造不存在的房源。\n\n"
                     + "你可以：\n"
-                    + "1. 改订**莫干山**，我这边有 5 个片区、多套真实风格的房源可以马上帮你筛；\n"
+                    + "1. 改订**" + suggested + "**，我这边有多套真实风格的房源可以马上帮你筛；\n"
                     + "2. 告诉我 " + dest + " 的具体需求（日期/预算/关系），我先记下来，后续接入 " + dest + " 数据后第一时间帮你比对。";
             sink.text(honest);
             conversationMemory.appendTurn(sessionId, userInput, honest);
@@ -208,9 +211,9 @@ public class AgentService {
         // ---- 第 7 步：逼出决策（LLM 生成最终话术，硬约束由代码保证）----
         // 结构化房源随 DECIDING 步骤的 payload 推给前端，前端据此渲染房源卡片（多方案对比）
         sink.step(StepEvent.of(StepEventType.DECIDING, "给出最终建议…", buildRoomsPayload(state)));
-        String finalAnswer = generateFinalAnswer(state, history);
-
-        sink.text(finalAnswer);
+        // 流式生成：LLM 每吐一个 token 就经 sink.text 推给前端（打字机效果），
+        // 未配置/异常降级时内部一次性推模板。此处不再重复 sink.text，避免内容翻倍。
+        String finalAnswer = generateFinalAnswerStream(state, history, sink);
         // 本轮问答写入对话记忆，供下一轮延续上下文
         conversationMemory.appendTurn(sessionId, userInput, finalAnswer);
         return finalAnswer;
@@ -535,8 +538,46 @@ public class AgentService {
         return payload;
     }
 
-    /** 第 7 步：逼出决策（硬约束由代码组装，LLM 润色话术）。 */
+    /** 第 7 步：逼出决策（硬约束由代码组装，LLM 润色话术）。非流式版，供降级兜底/测试路径使用。 */
     private String generateFinalAnswer(AgentState state, List<LlmMessage> history) {
+        return polishWithLlm(state, buildFinalTemplate(state), history);
+    }
+
+    /**
+     * 第 7 步流式版：真·逐 token 把 LLM 润色后的最终话术推给前端（打字机效果）。
+     * 未配置 LLM / 空输出 / 异常且尚无片段时，回退一次性推模板，保证任何情况下都有内容到达前端。
+     *
+     * @return 最终完整文本（写入对话记忆）
+     */
+    private String generateFinalAnswerStream(AgentState state, List<LlmMessage> history, EventSink sink) {
+        String template = buildFinalTemplate(state);
+        if (!llmClient.isConfigured()) {
+            sink.text(template);
+            return template;
+        }
+        StringBuilder streamed = new StringBuilder();
+        try {
+            List<LlmMessage> messages = buildPolishMessages(state, template, history);
+            String full = llmClient.chatStream(messages, List.of(), token -> {
+                streamed.append(token);
+                sink.text(token);
+            });
+            if (full != null && !full.isBlank()) {
+                return full;
+            }
+        } catch (Exception e) {
+            log.warn("流式润色失败，已推片段保留或回退模板：{}", e.toString());
+        }
+        // 流式无任何输出 → 推模板；已有部分 token 则保留已推内容（避免重复/拼接错乱）
+        if (streamed.length() == 0) {
+            sink.text(template);
+            return template;
+        }
+        return streamed.toString();
+    }
+
+    /** 组装最终推荐话术模板（硬约束：候选/缺点/主推/下一步都由代码保证，LLM 只润色）。 */
+    private String buildFinalTemplate(AgentState state) {
         List<Map<String, Object>> candidates = state.getCandidates();
         if (candidates.isEmpty()) {
             return "当前条件下没有找到匹配房源，建议放宽预算或日期后我再帮你筛。";
@@ -555,35 +596,21 @@ public class AgentService {
             sb.append("缺点：").append(c.get("drawback")).append("\n\n");
         }
 
-        // 主推 = 第一个候选（由筛选顺序保证）
         Map<String, Object> main = candidates.get(0);
         sb.append("✅ 主推：").append(main.get("title")).append("\n");
         sb.append("理由：").append(main.get("fitReason")).append("\n");
         sb.append("如果").append(main.get("drawback")).append("，改推【候选 2】。\n\n");
         sb.append("下一步：确认的话，我对这套报价，你看含全部费用的总价后决定要不要订。");
-
-        String template = sb.toString();
-        // 已配置 LLM 时润色话术（不改变候选与硬约束信息），失败则回退模板
-        return polishWithLlm(state, template, history);
+        return sb.toString();
     }
 
-    /** 用 LLM 润色最终话术（未配置或异常时回退模板，保证硬约束不丢）。 */
+    /** 用 LLM 润色最终话术（非流式，未配置或异常时回退模板，保证硬约束不丢）。 */
     private String polishWithLlm(AgentState state, String template, List<LlmMessage> history) {
         if (!llmClient.isConfigured()) {
             return template;
         }
         try {
-            List<LlmMessage> messages = new ArrayList<>();
-            messages.add(LlmMessage.system("你是民宿预约顾问。请把下面的推荐润色得自然、有温度，"
-                    + "但必须保留所有候选、主推、缺点、下一步动作等信息，不要增删房源事实。"
-                    + "本作品紧扣「健康/康养」主题：当用户关注健康、康养、带老人、静养、恢复、徒步放松等需求时，"
-                    + "突出每套房的健康友好要素（是否安静、空气质量、有无温泉/私汤、是否适合散步徒步、离镇远近），"
-                    + "并在适配理由里显式点明这套房对健康的友好之处。"
-                    + "你与用户正在进行连续对话，对话历史附在下方：润色时带上上下文，"
-                    + "用户之前的提问与你之前的回答都是背景，语气上体现「我记得我们刚才聊的内容」。"));
-            messages.addAll(history);
-            messages.add(LlmMessage.user(template));
-            LlmClient.LlmResponse resp = llmClient.chat(messages, List.of());
+            LlmClient.LlmResponse resp = llmClient.chat(buildPolishMessages(state, template, history), List.of());
             if (resp != null && resp.content() != null && !resp.content().isBlank()) {
                 return resp.content();
             }
@@ -591,6 +618,47 @@ public class AgentService {
             // 润色失败不影响主流程，回退模板
         }
         return template;
+    }
+
+    /** 构造话术润色 messages：系统约束（含条件式健康主题）+ 历史 + 本轮模板。流式/非流式共用。 */
+    private List<LlmMessage> buildPolishMessages(AgentState state, String template, List<LlmMessage> history) {
+        List<LlmMessage> messages = new ArrayList<>();
+        StringBuilder system = new StringBuilder("你是民宿预约顾问。请把下面的推荐润色得自然、有温度，"
+                + "但必须保留所有候选、主推、缺点、下一步动作等信息，不要增删房源事实。"
+                + "严格按用户的真实出行场景措辞，不要引入用户没有提到的主题或人群。");
+        // 健康/康养主题仅在用户明确表达相关需求时才强调——
+        // 无条件注入会把「情侣出行」等场景带偏成「带老人/康养」（2026-11-17 实测瑕疵）。
+        if (isHealthFocused(state, history)) {
+            system.append("用户关注健康/康养类需求，请突出每套房的健康友好要素"
+                    + "（是否安静、空气质量、有无温泉/私汤、是否适合散步徒步、离镇远近），"
+                    + "并在适配理由里点明这套房对健康的友好之处。");
+        }
+        system.append("你与用户正在进行连续对话，对话历史附在下方：润色时带上上下文，"
+                + "用户之前的提问与你之前的回答都是背景，语气上体现「我记得我们刚才聊的内容」。");
+        messages.add(LlmMessage.system(system.toString()));
+        messages.addAll(history);
+        messages.add(LlmMessage.user(template));
+        return messages;
+    }
+
+    /**
+     * 是否健康/康养/长辈出行场景——只有明确命中关键词才让润色强调健康要素。
+     * 依据：本轮抽取的偏好/关系 + 历史里的用户输入；不含「放松」这类泛词，避免误伤情侣/朋友出游。
+     */
+    private boolean isHealthFocused(AgentState state, List<LlmMessage> history) {
+        StringBuilder corpus = new StringBuilder();
+        if (state.getStyle() != null) corpus.append(state.getStyle());
+        if (state.getRelationship() != null) corpus.append(state.getRelationship());
+        for (LlmMessage m : history) {
+            if ("user".equals(m.role()) && m.content() != null) corpus.append(m.content());
+        }
+        String text = corpus.toString();
+        String[] healthKeys = {"康养", "健康", "养生", "静养", "疗愈", "老人", "长辈",
+                "父母", "爸妈", "温泉", "私汤", "徒步", "康复", "清肺", "洗肺"};
+        for (String key : healthKeys) {
+            if (text.contains(key)) return true;
+        }
+        return false;
     }
 
     /**

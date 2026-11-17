@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -93,6 +94,73 @@ public class DeepSeekLlmClient implements LlmClient {
 
         return new LlmResponse(content, toolCalls);
     }
+
+    /**
+     * 真·流式补全：{@code stream=true}，逐行解析 SSE {@code data:} 帧里的
+     * {@code choices[0].delta.content}，每拿到一个增量就回调 onToken，最后拼接返回完整文本。
+     *
+     * <p>思考模式（deepseek-flash/v4-pro 默认开启）下 delta 可能只有 reasoning_content、
+     * 没有 content，这里只取 content（最终答复），忽略思考链内容。遇 [DONE] 结束。
+     * 异常时已推片段不回滚——前端已渲染的部分保留，调用方可据此降级。
+     *
+     * @param onToken 每个文本增量的消费者（AgentService 据此 sink.text → 前端打字机）
+     * @return 拼接后的完整文本
+     */
+    @Override
+    public String chatStream(List<LlmMessage> messages, List<Map<String, Object>> tools,
+                             Consumer<String> onToken) {
+        if (!isConfigured()) {
+            throw new IllegalStateException("LLM_API_KEY 未配置，无法流式调用 DeepSeek（应走降级桩）");
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", model);
+        body.put("messages", toApiMessages(messages));
+        body.put("stream", true);
+        if (tools != null && !tools.isEmpty()) {
+            body.put("tools", tools);
+            body.put("tool_choice", "auto");
+        }
+
+        StringBuilder full = new StringBuilder();
+        webClient.post()
+                .uri("/chat/completions")
+                .header("Authorization", "Bearer " + apiKey)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToFlux(String.class)
+                .timeout(Duration.ofSeconds(60))
+                .doOnNext(line -> {
+                    String data = line.startsWith("data:") ? line.substring(5).trim() : line;
+                    if (data.isBlank() || "[DONE]".equals(data)) {
+                        return;
+                    }
+                    try {
+                        JsonNode root = objectMapper.readTree(data);
+                        JsonNode choices = root.path("choices");
+                        if (!choices.isArray() || choices.isEmpty()) {
+                            return;
+                        }
+                        JsonNode delta = choices.get(0).path("delta");
+                        JsonNode content = delta.path("content");
+                        if (content.isTextual()) {
+                            String token = content.asText();
+                            if (!token.isEmpty()) {
+                                full.append(token);
+                                onToken.accept(token);
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("跳过无法解析的流式帧：{}", e.toString());
+                    }
+                })
+                .blockLast();
+
+        return full.toString();
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper objectMapper =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     /**
      * 视觉模型调用（OpenAI 兼容 vision 消息格式）：根据图片推断用户偏好。
