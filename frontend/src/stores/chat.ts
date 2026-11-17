@@ -19,6 +19,15 @@ export const useChatStore = defineStore('chat', () => {
   const loading = ref(false)
   /** 会话 ID（多轮复用，保持后端状态累积）。 */
   const sessionId = ref<string>(genSessionId())
+  /**
+   * 最近一次 DECIDING 下发的房源卡片缓存。
+   *
+   * 背景（2026-11-17 修复）：下单那轮 Agent 只调 create_order，不重新走 DECIDING，
+   * 因此下单消息自身没有 cards，导致 OrderPayCard 拿不到房源名/封面图，
+   * 订单落成「民宿订单」+ 裂图。这里在会话内缓存最近一次卡片，
+   * 下单消息可复用，正确反查出真实民宿名与图片。
+   */
+  const lastCards = ref<RoomCard[]>([])
 
   /** 生成会话 ID（本地随机，页面存活期间不变）。 */
   function genSessionId(): string {
@@ -67,6 +76,7 @@ export const useChatStore = defineStore('chat', () => {
           const p = event.payload as { rooms?: RoomCard[]; checkIn?: string; checkOut?: string; guests?: number }
           if (Array.isArray(p.rooms)) {
             agentMsg().cards = p.rooms
+            lastCards.value = p.rooms
           }
           if (p.checkIn && p.checkOut) {
             agentMsg().booking = { checkIn: p.checkIn, checkOut: p.checkOut, guests: p.guests ?? 2 }
@@ -99,6 +109,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value = []
     activeSteps.value = []
     loading.value = false
+    lastCards.value = []
   }
 
   /**
@@ -155,5 +166,5 @@ export const useChatStore = defineStore('chat', () => {
     URL.revokeObjectURL(url)
   }
 
-  return { messages, activeSteps, loading, sessionId, send, reset, toMarkdown, exportMarkdown }
+  return { messages, activeSteps, loading, sessionId, lastCards, send, reset, toMarkdown, exportMarkdown }
 })

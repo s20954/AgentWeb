@@ -2,10 +2,27 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { findSpot, type Spot } from '@/mock/data'
+import { useUserDataStore } from '@/stores/userData'
+import ReviewSection from '@/components/ReviewSection.vue'
 
 const route = useRoute()
 const router = useRouter()
+const userData = useUserDataStore()
+
 const spot = computed<Spot | undefined>(() => findSpot(String(route.params.id)))
+
+const reviews = computed(() => (spot.value ? userData.spotReviewList(spot.value.spotId) : []))
+
+function submitReview(payload: { user: string; score: number; content: string }): void {
+  if (!spot.value) return
+  userData.addSpotReview(spot.value.spotId, {
+    id: 'rv-' + Date.now(),
+    user: payload.user,
+    score: payload.score,
+    content: payload.content,
+    date: new Date().toISOString().slice(0, 10),
+  })
+}
 </script>
 
 <template>
@@ -41,6 +58,11 @@ const spot = computed<Spot | undefined>(() => findSpot(String(route.params.id)))
           <p class="text-stone-600 leading-relaxed">{{ spot.description }}</p>
         </div>
       </div>
+    </div>
+
+    <!-- 游客评价 -->
+    <div class="mt-6 bg-white rounded-2xl p-6 shadow-sm">
+      <ReviewSection :reviews="reviews" title="游客评价" :on-submit="submitReview" />
     </div>
   </div>
 

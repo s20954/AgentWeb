@@ -5,6 +5,22 @@
  * 只需把本文件里的常量替换为 API 调用，页面组件无需改动（字段保持对齐即可）。
  */
 
+/** 房型实体：同一民宿下可有多种房型供选择。 */
+export interface RoomType {
+  /** 房型名，如「山景大床房」「星空 loft」 */
+  name: string
+  /** 床型说明 */
+  bedType: string
+  /** 该房型价格（元/晚） */
+  price: number
+  /** 建筑面积（㎡） */
+  area: number
+  /** 可住人数 */
+  maxGuests: number
+  /** 房型特色/卖点 */
+  feature?: string
+}
+
 /** 民宿实体（对齐规划书 homestay 表字段）。 */
 export interface Homestay {
   homestayId: string
@@ -24,6 +40,21 @@ export interface Homestay {
   maxGuests?: number
   /** 图片画廊（封面 + 补充图） */
   gallery?: string[]
+  /** 可选房型列表（多种房型供挑选，缺省时由 bedType/maxGuests 派生单一房型） */
+  roomTypes?: RoomType[]
+}
+
+/** 用户评价实体（民宿与景点共用）。 */
+export interface Review {
+  id: string
+  /** 评价者昵称 */
+  user: string
+  /** 星级 1-5 */
+  score: number
+  /** 评价内容 */
+  content: string
+  /** 日期 YYYY-MM-DD */
+  date: string
 }
 
 /** 景点实体（对齐规划书 spot 表字段）。 */
@@ -50,6 +81,8 @@ export interface Order {
   totalPrice: number
   contactPhone: string
   status: '待支付' | '已支付' | '已完成' | '已取消'
+  /** 所选房型名（下单时记录） */
+  roomType?: string
 }
 
 /** 轮播横幅。 */
@@ -80,6 +113,11 @@ export const homestayList: Homestay[] = [
     score: 4.8,
     bedType: '1张1.8米大床',
     maxGuests: 2,
+    roomTypes: [
+      { name: '山景大床房', bedType: '1张1.8米大床', price: 880, area: 32, maxGuests: 2, feature: '落地窗正对竹海，视野最佳' },
+      { name: 'loft 观景套房', bedType: '1张1.8米大床 + 1张沙发床', price: 1280, area: 55, maxGuests: 3, feature: '双层挑高，独立茶室与观景台' },
+      { name: '庭院亲子房', bedType: '1张1.8米大床 + 1张1.2米儿童床', price: 1180, area: 48, maxGuests: 3, feature: '带独立小院，适合亲子' },
+    ],
   },
   {
     homestayId: 'hs-002',
@@ -94,6 +132,10 @@ export const homestayList: Homestay[] = [
     score: 4.7,
     bedType: '1张1.8米大床 + 1张1.2米儿童床',
     maxGuests: 4,
+    roomTypes: [
+      { name: '亲子树屋房', bedType: '1张1.8米大床 + 1张1.2米儿童床', price: 1080, area: 45, maxGuests: 4, feature: '带滑梯与星空天窗，儿童最爱' },
+      { name: '庭院家庭套房', bedType: '2张1.5米双人床', price: 1380, area: 60, maxGuests: 4, feature: '独立庭院，空间更宽敞' },
+    ],
   },
   {
     homestayId: 'hs-003',
@@ -108,6 +150,10 @@ export const homestayList: Homestay[] = [
     score: 4.9,
     bedType: '1张2米特大床',
     maxGuests: 2,
+    roomTypes: [
+      { name: '私汤温泉房', bedType: '1张2米特大床', price: 1380, area: 50, maxGuests: 2, feature: '独立泡池 + 枯山水庭院' },
+      { name: '禅意景观房', bedType: '1张1.8米大床', price: 980, area: 38, maxGuests: 2, feature: '日式禅意，静享慢生活' },
+    ],
   },
   {
     homestayId: 'hs-004',
@@ -371,7 +417,7 @@ export const spotList: Spot[] = [
     location: '莫干山镇',
     area: '莫干山',
     openingHours: '08:00 - 17:00',
-    image: img('photo-1506905925346-21bda4d32df4'),
+    image: '/spots/sp-001.jpg',
     description:
       '国家 4A 级景区，以竹、泉、云"三胜"和清、静、绿、凉"四优"驰名中外，与北戴河、庐山、鸡公山并称中国四大避暑胜地。景区内两百多栋民国名人别墅散落竹海之间，剑池飞瀑传为干将莫邪铸剑之地，芦花荡公园四季有景。建议清晨登山看云海日出，午后走剑池—芦花荡环线，全程约三小时；夏季平均气温仅 24℃，是最旺的季节，冬季则可观赏江南罕见的雾凇。门票含景区内接驳车，自驾车辆需停放在山下换乘中心。',
   },
@@ -381,7 +427,7 @@ export const spotList: Spot[] = [
     location: '莫干山镇庾村',
     area: '莫干山',
     openingHours: '09:00 - 21:00',
-    image: img('photo-1518005020951-eccb494ad742'),
+    image: '/spots/sp-002.jpg',
     description:
       '由民国时期的蚕种场老厂房改造而成的文艺街区，保留了红砖墙、水塔与老式铁轨，如今聚集了独立咖啡馆、手作工坊、文创小店与山野餐厅。每逢周末有农夫市集，能买到德清本地的笋干、莫干黄芽茶和手作竹器。推荐傍晚时分来逛，老厂房在暖黄灯光下格外出片；市集里的自行车主题餐厅由旧车站改造，是必打卡的地标。整条街区不收门票，停车便利，适合安排半日慢游。',
   },
@@ -391,7 +437,7 @@ export const spotList: Spot[] = [
     location: '莫干山镇',
     area: '莫干山',
     openingHours: '全天开放',
-    image: img('photo-1551632811-561732d1e306'),
+    image: '/spots/sp-003.jpg',
     description:
       '全长约 100 公里的国家级登山健身步道系统，分初、中、高多条线路，沿途竹海、溪流、瀑布与古村落交错。最经典的"蒋公道"段从庾村出发直达山顶，约 8 公里、爬升 600 米，普通体力三小时可完成；亲子家庭可选劳岭水库环线，平缓好走且春有野花秋有红叶。步道全程免费，设有清晰路标和休憩亭，每年秋季的莫干山越野跑赛事即在此举行。雨后石阶湿滑，建议穿防滑徒步鞋并带足饮水。',
   },
@@ -401,7 +447,7 @@ export const spotList: Spot[] = [
     location: '莫干山镇仙潭村',
     area: '莫干山',
     openingHours: '18:00 - 22:00（夏季限定）',
-    image: img('photo-1501854140801-50d01698950b'),
+    image: '/spots/sp-004.jpg',
     description:
       '夏季限定的萤火虫观赏秘境，每年六月中旬到八月初，入夜后成千上万只萤火虫沿溪谷林间飞舞，宛如走入童话森林。村子为保护环境实行限流预约制，每晚仅开放三百个名额，建议提前在村口服务中心登记。观赏时请关闭手电与手机闪光灯，红光模式照明不影响萤火虫活动；溪边步道约一公里，走完全程四十分钟。这里是亲子自然教育和情侣约会的浪漫之选，周边的仙潭美术馆与稻田咖啡馆也值得顺道一逛。',
   },
@@ -558,3 +604,34 @@ export function findHomestay(id: string): Homestay | undefined {
 export function findSpot(id: string): Spot | undefined {
   return spotList.find((s) => s.spotId === id)
 }
+
+/**
+ * 获取民宿的可选房型列表。
+ * 优先返回 homestay.roomTypes；未显式配置时，由 bedType/maxGuests/price 派生一个默认房型，
+ * 保证详情页始终有房型可展示与选择。
+ */
+export function getRoomTypes(h: Homestay): RoomType[] {
+  if (h.roomTypes && h.roomTypes.length) return h.roomTypes
+  return [
+    {
+      name: '标准房',
+      bedType: h.bedType || '1张1.8米大床',
+      price: h.price,
+      area: 28,
+      maxGuests: h.maxGuests ?? 2,
+      feature: '基础房型，温馨舒适',
+    },
+  ]
+}
+
+/** 默认民宿评价（mock 种子，后续用户新增评价会追加到其上）。 */
+export const defaultHomestayReviews: Review[] = [
+  { id: 'rv-hs-1', user: '旅行者小王', score: 5, content: '风景绝美，管家服务很贴心，下次还会再来！', date: '2026-10-20' },
+  { id: 'rv-hs-2', user: '李同学', score: 4, content: '房间很干净，位置稍微偏一点但很安静，适合度假。', date: '2026-10-15' },
+]
+
+/** 默认景点评价（mock 种子）。 */
+export const defaultSpotReviews: Review[] = [
+  { id: 'rv-sp-1', user: '山野拾光', score: 5, content: '清晨登山看云海真的太值了，空气好到不想走，强烈推荐早点来避开人流。', date: '2026-10-18' },
+  { id: 'rv-sp-2', user: '阿布旅行记', score: 4, content: '景色很美，周末人略多，建议工作日来体验更好。', date: '2026-10-08' },
+]

@@ -1,12 +1,26 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { findHomestay, orderList, type Homestay } from '@/mock/data'
+import { findHomestay, getRoomTypes, type Homestay, type RoomType } from '@/mock/data'
+import { useUserDataStore } from '@/stores/userData'
+import ReviewSection from '@/components/ReviewSection.vue'
 
 const route = useRoute()
 const router = useRouter()
+const userData = useUserDataStore()
 
 const homestay = computed<Homestay | undefined>(() => findHomestay(String(route.params.id)))
+
+// 房型列表
+const roomTypes = computed<RoomType[]>(() => (homestay.value ? getRoomTypes(homestay.value) : []))
+
+// 当前选中房型（默认第一个）
+const selectedRoomType = ref<RoomType | null>(null)
+const selectedRoom = computed<RoomType | null>(() => selectedRoomType.value ?? roomTypes.value[0] ?? null)
+
+function selectRoom(rt: RoomType): void {
+  selectedRoomType.value = rt
+}
 
 // 预订表单
 const checkIn = ref('')
@@ -15,7 +29,7 @@ const contactPhone = ref('')
 const guestNum = ref(1)
 const submitted = ref(false)
 
-// 图片画廊：封面 + 补充图（营造多张照片的真实感）
+// 图片画廊：封面 + 补充图
 const gallery = computed<string[]>(() => {
   if (!homestay.value) return []
   const base = homestay.value.gallery && homestay.value.gallery.length
@@ -30,7 +44,6 @@ const gallery = computed<string[]>(() => {
   const list = base.map((seed) =>
     seed.startsWith('http') ? seed : `https://images.unsplash.com/${seed}?w=1200&q=80&auto=format&fit=crop`,
   )
-  // 确保第一张是封面
   if (homestay.value.image) list[0] = homestay.value.image
   return list
 })
@@ -44,25 +57,20 @@ const nights = computed(() => {
   return Math.round((b - a) / (1000 * 60 * 60 * 24))
 })
 
+// 单价 = 选中房型价格
+const unitPrice = computed(() => selectedRoom.value?.price ?? homestay.value?.price ?? 0)
+
 // 总价
-const totalPrice = computed(() => (homestay.value ? nights.value * homestay.value.price : 0))
+const totalPrice = computed(() => nights.value * unitPrice.value)
 
-// 最大入住人数
-const maxGuests = computed(() => homestay.value?.maxGuests ?? 10)
-
-// 评价（静态 mock）
-const reviews = ref([
-  { user: '旅行者小王', score: 5, content: '风景绝美，管家服务很贴心，下次还会再来！', date: '2026-10-20' },
-  { user: '李同学', score: 4, content: '房间很干净，位置稍微偏一点但很安静，适合度假。', date: '2026-10-15' },
-])
+// 最大入住人数 = 选中房型可住人数
+const maxGuests = computed(() => selectedRoom.value?.maxGuests ?? homestay.value?.maxGuests ?? 10)
 
 function submit(): void {
   if (!homestay.value || !checkIn.value || !checkOut.value || !contactPhone.value || nights.value <= 0) return
-  if (guestNum.value > maxGuests.value) {
-    guestNum.value = maxGuests.value
-  }
+  if (guestNum.value > maxGuests.value) guestNum.value = maxGuests.value
   submitted.value = true
-  orderList.unshift({
+  userData.addOrder({
     orderId: 'OR' + Date.now(),
     homestayId: homestay.value.homestayId,
     homestayTitle: homestay.value.title,
@@ -73,6 +81,7 @@ function submit(): void {
     totalPrice: totalPrice.value,
     contactPhone: contactPhone.value,
     status: '待支付',
+    roomType: selectedRoom.value?.name,
   })
   setTimeout(() => router.push('/order'), 800)
 }
@@ -86,6 +95,29 @@ function clampGuestNum(): void {
   if (isNaN(n) || n < 1) guestNum.value = 1
   else if (n > maxGuests.value) guestNum.value = maxGuests.value
 }
+
+// 切换房型时重置入住人数上限
+function onSelectRoom(rt: RoomType): void {
+  selectRoom(rt)
+  if (guestNum.value > rt.maxGuests) guestNum.value = rt.maxGuests
+}
+
+// 评价：读取 store 中的评价（持久化）
+const reviews = computed(() => (homestay.value ? userData.homestayReviewList(homestay.value.homestayId) : []))
+
+function submitReview(payload: { user: string; score: number; content: string }): void {
+  if (!homestay.value) return
+  userData.addHomestayReview(homestay.value.homestayId, {
+    id: 'rv-' + Date.now(),
+    user: payload.user,
+    score: payload.score,
+    content: payload.content,
+    date: new Date().toISOString().slice(0, 10),
+  })
+}
+
+// 从订单页「评价」跳转来时（?review=1），无需额外处理——详情页评价区始终可见，
+// 用户点击「写评价」即可展开表单。
 </script>
 
 <template>
@@ -115,7 +147,7 @@ function clampGuestNum(): void {
         <div class="bg-white rounded-2xl p-6 shadow-sm">
           <div class="flex items-start justify-between gap-4">
             <h1 class="text-2xl font-bold text-stone-800">{{ homestay.title }}</h1>
-            <div class="text-emerald-700 text-2xl font-bold shrink-0">¥{{ homestay.price }}<span class="text-sm font-normal text-stone-400">/ 晚</span></div>
+            <div class="text-emerald-700 text-2xl font-bold shrink-0">¥{{ homestay.price }}<span class="text-sm font-normal text-stone-400">/ 晚起</span></div>
           </div>
           <div class="mt-2 flex items-center gap-2 text-sm text-stone-500">
             <span class="flex items-center gap-1 text-amber-500 font-semibold">
@@ -133,46 +165,43 @@ function clampGuestNum(): void {
             <span v-for="(t, i) in homestay.tags" :key="i" class="px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 text-xs font-medium">{{ t }}</span>
           </div>
 
-          <!-- 房型信息 -->
-          <div v-if="homestay.bedType || homestay.maxGuests" class="mt-5 p-4 rounded-xl bg-stone-50 grid grid-cols-2 gap-3 text-sm">
-            <div class="flex items-center gap-2">
-              <svg viewBox="0 0 24 24" fill="none" class="w-5 h-5 text-emerald-700" stroke="currentColor" stroke-width="1.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75" />
-              </svg>
-              <span class="text-stone-500">床型</span>
-              <span class="text-stone-800 font-medium">{{ homestay.bedType }}</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <svg viewBox="0 0 24 24" fill="none" class="w-5 h-5 text-emerald-700" stroke="currentColor" stroke-width="1.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-              </svg>
-              <span class="text-stone-500">最多入住</span>
-              <span class="text-stone-800 font-medium">{{ homestay.maxGuests }} 人</span>
-            </div>
-          </div>
-
           <div class="mt-6">
             <h3 class="text-lg font-semibold text-stone-800 mb-2">民宿介绍</h3>
             <p class="text-stone-600 leading-relaxed">{{ homestay.description }}</p>
           </div>
         </div>
 
-        <!-- 评价 -->
+        <!-- 房型选择 -->
         <div class="mt-6 bg-white rounded-2xl p-6 shadow-sm">
-          <h3 class="text-lg font-semibold text-stone-800 mb-4">住客评价</h3>
-          <div v-for="(r, i) in reviews" :key="i" class="py-4 border-b border-stone-100 last:border-0">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <span class="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 text-sm font-semibold">{{ r.user.slice(0, 1) }}</span>
-                <span class="font-medium text-stone-800">{{ r.user }}</span>
+          <h3 class="text-lg font-semibold text-stone-800 mb-4">选择房型</h3>
+          <div class="space-y-3">
+            <div
+              v-for="rt in roomTypes"
+              :key="rt.name"
+              class="flex items-center justify-between gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all"
+              :class="selectedRoom?.name === rt.name ? 'border-emerald-600 bg-emerald-50/50' : 'border-stone-200 hover:border-emerald-300'"
+              @click="onSelectRoom(rt)"
+            >
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-stone-800">{{ rt.name }}</span>
+                  <span v-if="rt.feature" class="text-xs text-stone-400">{{ rt.feature }}</span>
+                </div>
+                <div class="mt-1 text-sm text-stone-500">
+                  {{ rt.bedType }} · {{ rt.area }}㎡ · 可住 {{ rt.maxGuests }} 人
+                </div>
               </div>
-              <div class="flex items-center gap-0.5 text-amber-500">
-                <svg v-for="s in 5" :key="s" viewBox="0 0 24 24" :fill="s <= r.score ? 'currentColor' : 'none'" :stroke="s <= r.score ? 'none' : 'currentColor'" stroke-width="1.5" class="w-4 h-4"><path d="M11.48 3.5c.31-.64 1.27-.64 1.58 0l1.79 3.63 4 .58c.71.1.99.97.48 1.47l-2.89 2.82.68 3.98c.12.7-.62 1.24-1.25.9L12 14.62l-3.57 1.88c-.63.33-1.37-.2-1.25-.9l.68-3.98-2.89-2.82c-.51-.5-.23-1.37.48-1.47l4-.58 1.79-3.63z" /></svg>
+              <div class="text-right shrink-0">
+                <div class="text-emerald-700 text-lg font-bold">¥{{ rt.price }}<span class="text-xs font-normal text-stone-400">/晚</span></div>
+                <div v-if="selectedRoom?.name === rt.name" class="mt-1 text-xs text-emerald-600 font-medium">已选</div>
               </div>
             </div>
-            <p class="mt-2 text-stone-600 text-sm">{{ r.content }}</p>
-            <p class="mt-1 text-xs text-stone-400">{{ r.date }}</p>
           </div>
+        </div>
+
+        <!-- 评价 -->
+        <div class="mt-6 bg-white rounded-2xl p-6 shadow-sm">
+          <ReviewSection :reviews="reviews" title="住客评价" :on-submit="submitReview" />
         </div>
       </div>
 
@@ -180,8 +209,9 @@ function clampGuestNum(): void {
       <div class="lg:col-span-1">
         <div class="bg-white rounded-2xl p-6 shadow-sm sticky top-20">
           <div class="flex items-baseline gap-1 mb-4">
-            <span class="text-2xl font-bold text-emerald-700">¥{{ homestay.price }}</span>
+            <span class="text-2xl font-bold text-emerald-700">¥{{ unitPrice }}</span>
             <span class="text-sm text-stone-400">/ 晚</span>
+            <span v-if="selectedRoom" class="ml-auto text-xs text-stone-400">{{ selectedRoom.name }}</span>
           </div>
           <div class="space-y-4">
             <div>
@@ -211,7 +241,7 @@ function clampGuestNum(): void {
             <!-- 费用明细 -->
             <div class="bg-stone-50 rounded-xl p-4 space-y-2 text-sm">
               <div class="flex justify-between text-stone-600">
-                <span>¥{{ homestay.price }} × {{ nights }} 晚</span>
+                <span>¥{{ unitPrice }} × {{ nights }} 晚</span>
                 <span>¥{{ totalPrice }}</span>
               </div>
               <div class="flex justify-between font-semibold text-stone-800 pt-2 border-t border-stone-200">
