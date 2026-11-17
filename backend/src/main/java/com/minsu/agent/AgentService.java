@@ -49,6 +49,7 @@ public class AgentService {
     private final LlmClient llmClient;
     private final ConversationMemory conversationMemory;
     private final RagService ragService;
+    private final com.minsu.tool.executor.RoomStore roomStore;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 会话级状态缓存（sessionId -> AgentState），支撑多轮收敛。 */
@@ -61,12 +62,14 @@ public class AgentService {
     private static final long SESSION_TTL_MS = 30 * 60 * 1000L;
 
     public AgentService(ToolDispatcher toolDispatcher, ToolRegistry toolRegistry, LlmClient llmClient,
-                        ConversationMemory conversationMemory, RagService ragService) {
+                        ConversationMemory conversationMemory, RagService ragService,
+                        com.minsu.tool.executor.RoomStore roomStore) {
         this.toolDispatcher = toolDispatcher;
         this.toolRegistry = toolRegistry;
         this.llmClient = llmClient;
         this.conversationMemory = conversationMemory;
         this.ragService = ragService;
+        this.roomStore = roomStore;
     }
 
     /** 思考链/文本事件回调。 */
@@ -104,6 +107,33 @@ public class AgentService {
 
         // 抽取结果可视化：把已识别的实体摘要推给前端（增强可解释性）
         sink.step(StepEvent.of(StepEventType.EXTRACTING, summarizeExtracted(state)));
+
+        // ---- 交易/订单意图优先路由（E2E 实测修复）----
+        // 看价/下单/查单/取消是真实工具操作，必须走 LLM 工具调用轨道执行；
+        // 若放在缺口追问/规则轨道之后，三要素一旦齐全会话会被锁死在规则筛选里，
+        // 用户说「yg-001 多少钱」「就订这套」「退了吧」全部失灵（报价/下单成假动作）。
+        if (llmClient.isConfigured() && isTransactionIntent(userInput)) {
+            sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "识别到报价/订单操作，让我调工具处理…"));
+            String txAnswer = runLlmToolLoop(sessionId, userInput, state, history, sink);
+            sink.text(txAnswer);
+            conversationMemory.appendTurn(sessionId, userInput, txAnswer);
+            return txAnswer;
+        }
+
+        // ---- 目的地覆盖校验（先于缺口追问）：数据层只有莫干山，其它目的地诚实告知「暂无房源」 ----
+        // 放在追问之前，避免用户先说「去成都」却被要求补日期、迟迟听不到「成都没数据」的诚实答复。
+        if (state.getDestination() != null && !roomStore.supportsDestination(state.getDestination())) {
+            String dest = state.getDestination();
+            sink.step(StepEvent.of(StepEventType.PACKAGING, "检查目的地房源覆盖…"));
+            String honest = "关于「" + dest + "」：目前我的房源库只覆盖了**莫干山**，"
+                    + "还没有 " + dest + " 的真实房源数据，所以没法给你靠谱的推荐——我不编造不存在的房源。\n\n"
+                    + "你可以：\n"
+                    + "1. 改订**莫干山**，我这边有 5 个片区、多套真实风格的房源可以马上帮你筛；\n"
+                    + "2. 告诉我 " + dest + " 的具体需求（日期/预算/关系），我先记下来，后续接入 " + dest + " 数据后第一时间帮你比对。";
+            sink.text(honest);
+            conversationMemory.appendTurn(sessionId, userInput, honest);
+            return honest;
+        }
 
         // 若缺必问三要素 → 第 3 步带着方案问，本轮终止（不筛选）
         if (!state.getGaps().isEmpty()) {
@@ -155,11 +185,74 @@ public class AgentService {
 
     // ---------------------------------------------------------------- 各步实现
 
+    /**
+     * 从用户输入中提取目的地地名（规范化后返回，未识别返回 null）。
+     *
+     * <p><b>数据层驱动设计（不再维护城市白名单）</b>：本方法只负责「从句子中把地名词抠出来」，
+     * 「支持哪些目的地」由数据层 {@link RoomStore#supportedDestinations()} 动态判定。
+     * 以后接入新城市数据，只需在数据层加房源，Agent 层识别零改动。
+     *
+     * <p>提取策略（按优先级）：
+     * <ol>
+     *   <li>精确匹配「数据层已支持的目的地名」（如「莫干山」），直接命中；</li>
+     *   <li>「去/到/改去/换去/换成/去往/前往」等动词后紧跟的 2~4 字地名，通用抓取任意城市（成都/重庆/大理…）；</li>
+     * </ol>
+     * 规范化：去掉「省」前缀（四川/云南/浙江等）与「市/镇/县」尾缀，保留「山/岛」景区特色字。
+     */
+    private String extractDestination(String input) {
+        if (input == null || input.isBlank()) {
+            return null;
+        }
+        // 1) 精确匹配数据层已支持的目的地（唯一真相源来自 RoomStore，动态派生）
+        for (String supported : roomStore.supportedDestinations()) {
+            if (input.contains(supported)) {
+                return supported;
+            }
+        }
+        // 2) 通用「去XX/到XX/改去XX」模式：先抓动词后的连续汉字段，再用停用词截断，得到地名。
+        // 不依赖城市清单，也不硬卡尾缀词（「游玩/旅游/度假」等表达千变万化，硬卡会漏）。
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?:去|到|改去|换去|换成|改到|换到|去往|前往)([\\u4e00-\\u9fa5]{2,8})")
+                .matcher(input);
+        if (m.find()) {
+            String raw = m.group(1);
+            // 规范化：去省前缀 + 去市/镇/县尾缀
+            raw = raw
+                    .replaceAll("^(四川|云南|浙江|广东|江苏|山东|湖北|陕西|福建|海南|湖南|安徽)", "")
+                    .replaceAll("(市|镇|县)$", "");
+            // 用停用词截断：地名之后紧跟「玩/旅游/游/度假/旅行/住/看/转/吧/啊/呀/呢/两天/三天」等即截断
+            for (String stop : List.of("旅游", "度假", "旅行", "游玩", "玩", "游", "住", "看", "转", "吧", "啊", "呀", "呢", "两天", "三天", "几天", "一晚")) {
+                int idx = raw.indexOf(stop);
+                if (idx > 0) {
+                    raw = raw.substring(0, idx);
+                }
+            }
+            // 截断后再清一次尾缀（截断可能露出「市/县」等）
+            raw = raw.replaceAll("(市|镇|县)$", "");
+            if (raw.isBlank()) {
+                return null;
+            }
+            return raw;
+        }
+        return null;
+    }
+
     /** 第 1 步：实体抽取。用规则 + 轻量启发式（不依赖 LLM，保证确定性）。 */
     private void extractEntities(String input, AgentState state) {
-        // 目的地：莫干山为当前唯一样本
-        if (input.contains("莫干山")) {
-            state.setDestination("莫干山");
+        // 目的地：识别常见国内目的地（城市/景区名），并规范化（去省前缀、去「市/山」等冗余）。
+        // 若用户切换到与之前不同的目的地，旧的目的地相关上下文（日期/预算/风格）随之作废，
+        // 避免「搜成都却沿用上一轮莫干山的日期预算」的错误（详见 2026-11-17 成都 bug）。
+        String newDestination = extractDestination(input);
+        if (newDestination != null) {
+            if (state.getDestination() != null && !state.getDestination().equals(newDestination)) {
+                // 换目的地：清空日期/预算/风格/候选（关系、人数与目的地弱相关，保留）
+                state.setCheckIn(null);
+                state.setCheckOut(null);
+                state.setBudgetPerNight(null);
+                state.setStyle(null);
+                state.setCandidates(new ArrayList<>());
+            }
+            state.setDestination(newDestination);
         }
         // 日期：匹配 YYYY-MM-DD / YYYY/MM/DD / M月D日（无年份，默认今年）
         // 支持三种表达：
@@ -485,6 +578,48 @@ public class AgentService {
         if (state.getRelationship() != null) sb.append(" ").append(state.getRelationship());
         if (sb.length() == 0) sb.append("莫干山");
         return sb.toString();
+    }
+
+    /** 房源 ID 字面量（如 yg-001 / ll-002）：出现即视为已锁定某套房源谈交易。 */
+    private static final java.util.regex.Pattern ROOM_ID_PATTERN = java.util.regex.Pattern
+            .compile("(?i)[a-z]{2,6}\\s*-\\s*\\d{2,4}");
+
+    /**
+     * 判断是否为交易/订单意图（看价 / 下单 / 查单 / 取消）。
+     *
+     * <p>与混淆矩阵的边界句体系对齐（见《测试案例清单》第二节）：
+     * 这些意图必须由 LLM 工具调用轨道执行真实工具（quote_price / create_order /
+     * get_order / cancel_order），规则筛选轨道覆盖不了。
+     * 判定宁可宽松：误路由的代价只是「让 LLM 自主选工具」（混淆矩阵实测 100% 选对），
+     * 而漏路由的代价是交易功能整体失灵。
+     */
+    private boolean isTransactionIntent(String input) {
+        if (input == null || input.isBlank()) {
+            return false;
+        }
+        // 已锁定房源 ID（yg-001 等）：看价/问答/下单都可能，交给 LLM 判断
+        if (ROOM_ID_PATTERN.matcher(input).find()) {
+            return true;
+        }
+        // 报价类：问价但语义上有明确对象（这套/这间/那套/它），或明确的报价动作词
+        for (String kw : List.of("多少钱", "报价", "算一下价格", "价格算", "总价", "住两晚", "住三晚", "一晚多少钱")) {
+            if (input.contains(kw)) {
+                return true;
+            }
+        }
+        // 下单类：强下单信号词（「我想订房先看看」这类搜索意图由 LLM 轨道自行选 search_rooms，无害）
+        for (String kw : List.of("就订", "下单", "预订", "帮我订", "我要订", "订这套", "订这间", "订 yg", "订 ll")) {
+            if (input.contains(kw)) {
+                return true;
+            }
+        }
+        // 查单/取消类
+        for (String kw : List.of("订单", "退了", "取消", "不去了", "不要了", "退款", "退单")) {
+            if (input.contains(kw)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

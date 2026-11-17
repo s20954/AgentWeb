@@ -255,4 +255,22 @@ class ToolLayerTest {
         assertFalse(r.success());
         assertEquals("PARAM_INVALID", r.data().get("errorType"));
     }
+
+    // ---------------------------------------------------------------- 数据层驱动目的地（2026-11-17 重构）
+
+    @Test
+    void roomStoreIsSingleSourceOfTruthForDestinations() {
+        RoomStore store = new RoomStore();
+        // supportedDestinations 应从房源数据动态派生（而非 Agent 层硬编码城市清单）
+        List<String> supported = store.supportedDestinations();
+        assertFalse(supported.isEmpty(), "数据层应至少覆盖一个目的地");
+        assertTrue(supported.contains("莫干山"), "数据层应覆盖莫干山");
+        assertTrue(supported.contains("成都"), "数据层应覆盖成都");
+        assertTrue(supported.contains("重庆"), "数据层应覆盖重庆");
+        assertTrue(supported.contains("上海"), "数据层应覆盖上海");
+        assertTrue(supported.contains("杭州"), "数据层应覆盖杭州");
+        assertTrue(store.supportsDestination("莫干山"), "supportsDestination 应返回 true");
+        assertTrue(store.supportsDestination("成都"), "成都有房源，supportsDestination 应返回 true");
+        assertFalse(store.supportsDestination("西安"), "数据层无西安房源，supportsDestination 应返回 false");
+    }
 }

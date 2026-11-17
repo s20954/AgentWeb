@@ -48,7 +48,8 @@ class AgentServiceTest {
                 return false;
             }
         };
-        agentService = new AgentService(dispatcher, registry, noopLlm, new ConversationMemory(), ragService);
+        agentService = new AgentService(dispatcher, registry, noopLlm, new ConversationMemory(), ragService,
+                new RoomStore());
         steps = new ArrayList<>();
         texts = new ArrayList<>();
     }
@@ -224,5 +225,163 @@ class AgentServiceTest {
         assertTrue(t2.contains("主推") || t2.contains("候选"),
                 "多轮补齐（就一天+裸预算+朋友）应完成推荐，实际回复：" + t2);
         assertFalse(t2.contains("还差"), "补齐后不应再追问，实际回复：" + t2);
+    }
+
+    // ---------------------------------------------------------------- E2E 修复：交易意图不得被规则轨道锁死
+
+    /**
+     * 可配置的 LLM 桩：tools 为空视为润色调用（返回空内容回退模板）；
+     * tools 非空为工具循环调用：第一次返回 toolCalls，之后返回最终文本。
+     */
+    private LlmClient scriptedToolLlm(String toolName, String argumentsJson, String finalAnswer) {
+        return new LlmClient() {
+            boolean toolResultFed = false;
+
+            @Override
+            public LlmResponse chat(List<com.minsu.agent.llm.LlmMessage> messages, List<Map<String, Object>> tools) {
+                if (tools == null || tools.isEmpty()) {
+                    return new LlmResponse("", List.of());
+                }
+                if (!toolResultFed) {
+                    toolResultFed = true;
+                    Map<String, Object> fn = Map.of("name", toolName, "arguments", argumentsJson);
+                    Map<String, Object> call = Map.of("id", "call-1", "function", fn);
+                    return new LlmResponse("", List.of(call));
+                }
+                return new LlmResponse(finalAnswer, List.of());
+            }
+
+            @Override
+            public boolean isConfigured() {
+                return true;
+            }
+        };
+    }
+
+    private AgentService agentWith(LlmClient llm) {
+        ToolRegistry registry = new ToolRegistry();
+        RagService ragService = new RagService(new KbStore(new com.minsu.rag.KbRepository(
+                System.getProperty("java.io.tmpdir") + "/minsu-kb-test-" + System.nanoTime() + ".db")));
+        ToolDispatcher dispatcher = new ToolDispatcher(registry, new RoomStore(), new OrderStore(), ragService);
+        return new AgentService(dispatcher, registry, llm, new ConversationMemory(), ragService, new RoomStore());
+    }
+
+    @Test
+    void quoteIntentAfterConvergenceRoutesToToolLoop() {
+        // 回归背景：三要素齐全后 isSoftDemand 恒 false，问价被锁死在规则轨道重走推荐（E2E 第3轮实测 bug）
+        AgentService svc = agentWith(scriptedToolLlm("quote_price",
+                "{\"roomId\":\"yg-001\",\"checkIn\":\"2026-11-21\",\"checkOut\":\"2026-11-22\"}",
+                "yg-001 两晚总价 930 元（含清洁费）。"));
+        // 多轮补齐三要素（规则轨道完成推荐）
+        svc.run("tx1", "我想去莫干山", sink());
+        svc.run("tx1", "11月21日到22日", sink());
+        svc.run("tx1", "预算600，情侣", sink());
+
+        steps.clear();
+        texts.clear();
+
+        // T4：三要素已齐全，明确问价 → 必须进 LLM 工具轨道调 quote_price，不得重走推荐
+        String answer = svc.run("tx1", "yg-001 这套住两晚要多少钱", sink());
+
+        List<StepEventType> types = steps.stream().map(StepEvent::type).toList();
+        assertTrue(types.contains(StepEventType.TOOL_CALLING), "问价应走工具调用轨道");
+        assertTrue(steps.stream().anyMatch(s -> s.message() != null && s.message().contains("quote_price")),
+                "应调用 quote_price，实际步骤：" + steps.stream().map(StepEvent::message).toList());
+        assertTrue(answer.contains("930"), "应基于真实工具结果回答，实际：" + answer);
+        assertFalse(types.contains(StepEventType.DECIDING), "问价不应重走推荐包装");
+    }
+
+    @Test
+    void cancelIntentRoutesToToolLoop() {
+        // 「把订单退了」是交易意图：即使当前会话没有已识别三要素，也应交给 LLM 工具轨道处理
+        AgentService svc = agentWith(scriptedToolLlm("cancel_order",
+                "{\"orderId\":\"MS123456\"}",
+                "订单 MS123456 已取消。"));
+        String answer = svc.run("tx2", "帮我把订单 MS123456 退了", sink());
+
+        List<StepEventType> types = steps.stream().map(StepEvent::type).toList();
+        assertTrue(types.contains(StepEventType.TOOL_CALLING), "取消订单应走工具调用轨道");
+        assertTrue(steps.stream().anyMatch(s -> s.message() != null && s.message().contains("cancel_order")),
+                "应调用 cancel_order");
+        assertTrue(answer.contains("已取消"), "应基于真实工具结果回答，实际：" + answer);
+        assertFalse(types.contains(StepEventType.ASKING), "取消意图不应触发缺口追问");
+    }
+
+    @Test
+    void searchIntentDoesNotTriggerToolLoop() {
+        // 反向回归：普通推荐诉求（无交易词）仍应走规则轨道七步，不被误路由
+        String answer = agentService.run("tx3",
+                "莫干山，11月1日到3日，预算每晚1500，两个人（情侣），喜欢设计风格", sink());
+        List<StepEventType> types = steps.stream().map(StepEvent::type).toList();
+        assertTrue(types.contains(StepEventType.FILTERING), "普通找房应走规则筛选轨道");
+        assertTrue(answer.contains("主推"), "应完成推荐");
+    }
+
+    // ---------------------------------------------------------------- 目的地泛化（2026-11-17 成都 bug）
+
+    @Test
+    void unsupportedDestinationAnswersHonestly() {
+        // 识别「西安」，但数据层无西安房源 → 诚实告知，不瞎编、不硬套已有城市
+        String answer = agentService.run("cd1",
+                "我要去西安游玩两天，和朋友俩人，预算每晚500", sink());
+
+        List<StepEventType> types = steps.stream().map(StepEvent::type).toList();
+        // 应识别到目的地切换，且不进入规则筛选（数据层不覆盖西安）
+        assertFalse(types.contains(StepEventType.FILTERING), "西安无数据不应进入筛选");
+        assertTrue(answer.contains("西安"), "回复应明确提及目的地西安，实际：" + answer);
+        assertTrue(answer.contains("编") || answer.contains("没有") || answer.contains("暂无"),
+                "应表达「暂无/不编造」的诚实态度，实际：" + answer);
+    }
+
+    @Test
+    void switchingDestinationResetsDateAndBudget() {
+        // 换目的地后，旧的日期/预算应作废，不能沿用莫干山的日期预算去搜新目的地
+        // T1：莫干山 + 完整信息 → 完成推荐
+        String t1 = agentService.run("cd2", "莫干山，11月1日到3日，预算每晚800，情侣", sink());
+        assertTrue(t1.contains("主推") || t1.contains("候选"), "莫干山应正常推荐");
+
+        steps.clear();
+        texts.clear();
+
+        // T2：换到西安（数据层无西安），仅带关系 → 应作废旧日期预算，诚实告知西安无数据
+        String t2 = agentService.run("cd2", "我改主意了，想去西安，和朋友俩人", sink());
+        assertFalse(t2.contains("2027-11-01") && t2.contains("800"),
+                "换目的地后不应沿用旧日期预算，实际：" + t2);
+        assertTrue(t2.contains("西安"), "应识别新目的地西安");
+    }
+
+    @Test
+    void switchingToSupportedCityRecommendsItsRooms() {
+        // 换到有数据的新城市（成都），应正常推荐成都房源，而非提示「暂无」
+        // T1：莫干山 + 完整信息 → 完成推荐
+        String t1 = agentService.run("cd4", "莫干山，11月1日到3日，预算每晚800，情侣", sink());
+        assertTrue(t1.contains("主推") || t1.contains("候选"), "莫干山应正常推荐");
+
+        steps.clear();
+        texts.clear();
+
+        // T2：换到成都 + 完整信息 → 应推荐成都房源（数据层已补成都数据）
+        String t2 = agentService.run("cd4", "改去成都，11月1日到3日，预算每晚800，情侣", sink());
+        assertTrue(t2.contains("主推") || t2.contains("候选"),
+                "成都有数据，应正常推荐而非提示暂无，实际：" + t2);
+        // 推荐内容应是成都房源（春熙路/太古里/宽窄巷子等成都片区特征词）
+        assertTrue(t2.contains("春熙路") || t2.contains("太古里") || t2.contains("宽窄巷子") || t2.contains("锦里"),
+                "应推荐成都片区房源，实际：" + t2);
+    }
+
+    @Test
+    void switchingToNonWhitelistCityDoesNotResidueOldDestination() {
+        // 回归背景（2026-11-17）：目的地识别曾写死白名单，换到白名单外城市会残留旧目的地
+        // 现重构为数据层驱动 + 通用正则兜底，任意城市切换都不应残留旧值
+        String t1 = agentService.run("cd3", "我想去成都玩", sink());
+        assertTrue(t1.contains("成都"), "成都应被识别");
+
+        steps.clear();
+        texts.clear();
+
+        // 换「重庆」（曾因白名单识别不到 → destination 残留成都）
+        String t2 = agentService.run("cd3", "改去重庆吧", sink());
+        assertTrue(t2.contains("重庆"), "应识别新目的地重庆，而非残留成都，实际：" + t2);
+        assertFalse(t2.contains("成都"), "不应再提成都，实际：" + t2);
     }
 }
