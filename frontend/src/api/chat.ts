@@ -1,6 +1,26 @@
 import type { StepEvent } from '@/types/chat'
 
 /**
+ * 持久化用户 ID —— 与 sessionId 解耦。
+ *
+ * 背景：后端把 `X-User-Id` 头当作「订单归属用户」，而 `sessionId` 仅用于多轮对话状态缓存。
+ * 若两者合一（把 sessionId 当 userId），用户下单后一刷新页面，sessionId 随机变化，
+ * 订单归属的 userId 也随之变化，导致查单/取消单被「无权操作」拒绝。
+ *
+ * 因此这里用 localStorage 持久化一个稳定 userId：刷新页面不变，保证订单可被本人查到。
+ */
+const USER_ID_KEY = 'minsu-user-id'
+
+function getOrCreateUserId(): string {
+  let id = localStorage.getItem(USER_ID_KEY)
+  if (!id) {
+    id = 'web-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36)
+    localStorage.setItem(USER_ID_KEY, id)
+  }
+  return id
+}
+
+/**
  * SSE 流式对话客户端 —— 消费后端 /api/chat/stream。
  *
  * 后端事件协议（event=step/text/done/error，data 为 JSON 或字符串）。
@@ -37,7 +57,8 @@ export async function streamChat(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Id': sessionId,
+        // 订单归属用稳定的持久 userId，而非会随刷新变化的 sessionId
+        'X-User-Id': getOrCreateUserId(),
       },
       body: JSON.stringify({ message, sessionId }),
     })
