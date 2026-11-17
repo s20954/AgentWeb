@@ -79,7 +79,7 @@ public class ChatController {
         // 异步执行 Agent 收敛，避免阻塞 Reactor 线程
         Thread.ofVirtual().start(() -> {
             try {
-                agentService.run(sessionId, message, eventSink);
+                agentService.run(userId, sessionId, message, eventSink);
                 sink.tryEmitNext(ServerSentEvent.<String>builder("{}").event("done").build());
             } catch (Exception e) {
                 emitError(sink, e);

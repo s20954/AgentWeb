@@ -82,14 +82,24 @@ public class AgentService {
     }
 
     /**
+     * 便捷重载：userId 回退为 sessionId（用于测试/无独立用户体系的场景）。
+     * 生产链路应走 {@link #run(String, String, String, EventSink)} 显式传入持久 userId，
+     * 否则刷新页面后 sessionId 变化会导致订单归属错乱（查单/取消被「无权操作」拒绝）。
+     */
+    public String run(String sessionId, String userInput, EventSink sink) {
+        return run(sessionId, sessionId, userInput, sink);
+    }
+
+    /**
      * 执行一次 Agent 收敛（按 sessionId 缓存状态，支持多轮）。
      *
+     * @param userId    用户标识（订单归属；持久不变，区别于会随刷新变化的 sessionId）
      * @param sessionId 会话 ID（同一会话多轮共享 AgentState，实现「分轮收敛」）
      * @param userInput 用户当前这句话
      * @param sink      事件回调
      * @return 最终文本回复
      */
-    public String run(String sessionId, String userInput, EventSink sink) {
+    public String run(String userId, String sessionId, String userInput, EventSink sink) {
         // 取旧会话状态（多轮累积），无则新建；先清扫过期/超限条目，防内存泄漏
         evictSessionsIfNeeded();
         AgentState state = sessions.computeIfAbsent(sessionId, k -> new AgentState());
@@ -114,7 +124,7 @@ public class AgentService {
         // 用户说「yg-001 多少钱」「就订这套」「退了吧」全部失灵（报价/下单成假动作）。
         if (llmClient.isConfigured() && isTransactionIntent(userInput)) {
             sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "识别到报价/订单操作，让我调工具处理…"));
-            String txAnswer = runLlmToolLoop(sessionId, userInput, state, history, sink);
+            String txAnswer = runLlmToolLoop(userId, userInput, state, history, sink);
             sink.text(txAnswer);
             conversationMemory.appendTurn(sessionId, userInput, txAnswer);
             return txAnswer;
@@ -154,7 +164,7 @@ public class AgentService {
         if (softDemand && llmClient.isConfigured()) {
             // 轨道 B：LLM 自主工具调用（真 Function Calling）
             sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "让我自主判断该查什么、该调哪个工具…"));
-            String autonomousAnswer = runLlmToolLoop(sessionId, userInput, state, history, sink);
+            String autonomousAnswer = runLlmToolLoop(userId, userInput, state, history, sink);
             sink.text(autonomousAnswer);
             conversationMemory.appendTurn(sessionId, userInput, autonomousAnswer);
             return autonomousAnswer;
@@ -162,7 +172,7 @@ public class AgentService {
 
         // 轨道 A：确定性四轴筛选（规则路径，稳 + 可解释）
         sink.step(StepEvent.of(StepEventType.FILTERING, "从候选房源中筛选…"));
-        List<Map<String, Object>> candidates = filterCandidates(sessionId, state);
+        List<Map<String, Object>> candidates = filterCandidates(userId, state);
         state.setCandidates(candidates);
         sink.step(StepEvent.of(StepEventType.FILTERING,
                 "按「目的地=" + state.getDestination() + "、日期=" + state.getCheckIn() + "~" + state.getCheckOut()
@@ -657,7 +667,7 @@ public class AgentService {
      *
      * <p>安全护栏：最多循环 {@code MAX_TOOL_ROUNDS} 轮，防止 LLM 陷入无休止调用。
      */
-    private String runLlmToolLoop(String sessionId, String userInput, AgentState state,
+    private String runLlmToolLoop(String userId, String userInput, AgentState state,
                                   List<LlmMessage> history, EventSink sink) {
         List<LlmMessage> messages = new ArrayList<>();
         messages.add(LlmMessage.system(buildToolCallingSystemPrompt()));
@@ -699,7 +709,7 @@ public class AgentService {
                 sink.step(StepEvent.of(StepEventType.TOOL_CALLING, "调用工具 " + toolName + " …"));
 
                 Map<String, Object> args = parseArgs(argsJson);
-                ToolResult result = toolDispatcher.dispatch(sessionId, toolName, args);
+                ToolResult result = toolDispatcher.dispatch(userId, toolName, args);
                 // 工具结果回填（role=tool），让 LLM 基于真实结果继续判断
                 messages.add(LlmMessage.tool(callId, serializeToolResult(result)));
             }
