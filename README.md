@@ -18,7 +18,7 @@ AgentWeb/
 │   │   ├── App.vue                 # 根组件
 │   │   ├── router/index.ts         # 门户路由（/home /homestay /spot /order /profile + /agent 对话页）
 │   │   ├── views/
-│   │   │   ├── ChatView.vue        # AI 对话预约页（思考链 + SSE 流式）
+│   │   │   ├── ChatView.vue        # AI 对话预约页（决策节点可视化 + SSE 流式）
 │   │   │   └── portal/             # 门户页面：PortalLayout / Home / Homestay(列表+详情)
 │   │   │                           #   / Spot(列表+详情) / Order / Profile / NotFound
 │   │   ├── components/             # ChatInput / ChatMessage / ThinkingChain / RoomCards /
@@ -33,9 +33,9 @@ AgentWeb/
 ├── backend/                        # 后端：Spring Boot 3 + WebFlux（轻接入层）
 │   ├── src/main/java/com/minsu/
 │   │   ├── MinsuApplication.java
-│   │   ├── agent/                  # Agent 层：七步收敛 + 缺口识别 + 思考链事件
+│   │   ├── agent/                  # Agent 层：七步收敛 + 缺口识别 + 决策节点事件
 │   │   │   ├── ConversationMemory.java  # 会话级对话记忆（跨多轮带上下文）
-│   │   │   ├── step/               # 思考链 StepEvent / StepEventType
+│   │   │   ├── step/               # 决策节点 StepEvent / StepEventType
 │   │   │   └── llm/                # LLM 客户端抽象 + DeepSeek 实现
 │   │   ├── tool/                   # 工具层：6 工具 + 六槽位 + 错误三类型
 │   │   │   ├── executor/           #   搜索/报价/下单/查单/取消/问房 + 房/单内存存储
@@ -59,8 +59,8 @@ AgentWeb/
 ## 二、四层架构
 
 ```
-前端层   Vue3 + TS + Tailwind + Pinia + vue-router（门户多页 · 流式渲染 · 思考链可视化 · 语音 · 看图选房）
-Agent层  七步收敛 + 缺口识别 + 会话记忆 + 地域知识（映射为前端可见的思考链）
+前端层   Vue3 + TS + Tailwind + Pinia + vue-router（门户多页 · 流式渲染 · 决策节点可视化 · 语音 · 看图选房）
+Agent层  七步收敛 + 缺口识别 + 会话记忆 + 地域知识（关键决策节点映射为前端可见时间线）
 工具层   6 工具 + 六槽位 + 边界句 + 错误三类型（Function Calling）
 接入层   Java Spring Boot（LLM 流式代理 / Tool Calling / RAG / 视觉 / 联网规划 / 房源 CRUD）
 ```
@@ -70,7 +70,8 @@ Agent层  七步收敛 + 缺口识别 + 会话记忆 + 地域知识（映射为�
 - **完整门户网站**：首页 / 民宿列表与详情 / 景点列表与详情 / 我的订单 / 个人中心 + 404 页，vue-router 多页路由，响应式导航（含移动端抽屉）。
 - **多目的地支持**：Mock 数据覆盖莫干山 / 大理 / 北京 / 成都 / 三亚 / 厦门等全国多地，非单一景区。
 - **AI 对话预约（核心）**：
-  - **七步收敛思考链**：Agent 推理过程实时映射为前端可见思考步骤，命中「可解释性」评分点。
+  - **决策节点可视化**：把七步收敛流程中的关键决策节点（理解需求 / 识别缺口 / 加载知识 / 筛选房源 / 调用工具 / 给出建议）实时映射为前端可见时间线，让 Agent 在做什么一目了然，命中「可解释性」评分点。
+    > 口径说明：这里展示的是**确定性的决策流程节点**（每步携带真实运行数据，如「筛出 4 套候选」），不是 LLM 的原始逐 token 思维过程；定位为「可追溯的决策过程」，而非「黑盒推理复现」。
   - **缺口识别 + 追问**：信息不全先反问（目的地/人数/天数），确认后再规划，不瞎猜默认值。
   - **联网搜索 + LLM 自主规划**：搜前 `buildSearchQuery` 清洗口语 → 必应联网 → `planWithLlm` 走七步收敛输出结构化行程方案，而非甩百科链接。
   - **防污染沉淀**：只有 LLM 规划成功才沉淀回知识库，降级拼接与无关结果不写入。
