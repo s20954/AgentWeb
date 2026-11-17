@@ -18,9 +18,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class RoomStore {
 
-    /** 封面图（Unsplash 占位，与门户 mock 同源，后续换真实房源图）。 */
+    /** 封面图（本地静态资源路径，前端 public/images 下；消除 Unsplash 外链国内加载隐患）。 */
     private static String img(String seed) {
-        return "https://images.unsplash.com/" + seed + "?w=800&q=80&auto=format&fit=crop";
+        // seed 形如 "photo-1600585154340-be6161a56a0c"，取中间数字 id 作为文件名
+        String id = seed.replaceFirst("^photo-", "").split("-")[0];
+        return "/images/" + id + ".jpg";
     }
 
     /** 多城市 mock 房源（莫干山 5 片区 7 套 + 成都/重庆/上海/杭州 各 4 套）。 */

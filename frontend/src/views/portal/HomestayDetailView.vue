@@ -41,9 +41,12 @@ const gallery = computed<string[]>(() => {
         'photo-1571896349842-33c89424de2d',
         'photo-1600607687939-ce8a6c25118c',
       ]
-  const list = base.map((seed) =>
-    seed.startsWith('http') ? seed : `https://images.unsplash.com/${seed}?w=1200&q=80&auto=format&fit=crop`,
-  )
+  const list = base.map((seed) => {
+    // 已是本地路径（/images/ 或 /spots/）或 http 外链则原样返回
+    if (seed.startsWith('/') || seed.startsWith('http')) return seed
+    // 裸 photo-xxx seed → 转本地路径
+    return `/images/${seed.replace(/^photo-/, '').split('-')[0]}.jpg`
+  })
   if (homestay.value.image) list[0] = homestay.value.image
   return list
 })

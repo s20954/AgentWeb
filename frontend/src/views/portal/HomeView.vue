@@ -190,7 +190,7 @@ const groups = computed(() => {
 
 /* hero 背景：竹林意象 + 墨绿渐变压暗 */
 .hero-bg {
-  background-image: url('https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1600&q=80');
+  background-image: url('/images/1500530855697.jpg');
   background-size: cover;
   background-position: center 40%;
 }

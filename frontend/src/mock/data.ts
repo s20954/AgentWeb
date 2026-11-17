@@ -94,9 +94,9 @@ export interface Banner {
   image?: string
 }
 
-/** 民宿封面图（使用 Unsplash 占位图，后续可换真实房源图）。 */
+/** 民宿封面图（本地静态资源，消除 Unsplash 外链在国内网络的加载隐患）。 */
 const img = (seed: string): string =>
-  `https://images.unsplash.com/${seed}?w=800&q=80&auto=format&fit=crop`
+  `/images/${seed.replace(/^photo-/, '').split('-')[0]}.jpg`
 
 /** 推荐民宿列表（覆盖全国多地）。 */
 export const homestayList: Homestay[] = [
