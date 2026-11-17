@@ -43,3 +43,38 @@ export async function quotePrice(
   }
   return (await res.json()) as QuoteResponse
 }
+
+/** 支付接口返回（对齐后端 pay_order 结果）。 */
+export interface PayOrderData {
+  orderId: string
+  roomId: string
+  total: number
+  status: string
+  paid: boolean
+}
+
+export interface PayOrderResponse {
+  toolName?: string
+  success: boolean
+  data?: PayOrderData | QuoteError
+  note?: string
+}
+
+/**
+ * 对一笔「待支付」订单执行 mock 支付（后端 pay_order，写入）。
+ * 支付成功后订单状态转为「已确认」。真实支付网关接入是后续阶段。
+ */
+export async function payOrder(
+  orderId: string,
+  userId = 'web-demo',
+): Promise<PayOrderResponse> {
+  const res = await fetch('/api/tools/pay_order/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+    body: JSON.stringify({ orderId }),
+  })
+  if (!res.ok) {
+    return { success: false, data: { errorType: 'HTTP', message: `请求失败：HTTP ${res.status}` } }
+  }
+  return (await res.json()) as PayOrderResponse
+}

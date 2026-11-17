@@ -2,14 +2,12 @@
 import { computed, ref } from 'vue'
 import type { BookingContext, RoomCard } from '@/types/chat'
 import { quotePrice, type QuoteData } from '@/api/tools'
-import { useChatStore } from '@/stores/chat'
+import { getOrCreateUserId } from '@/api/chat'
 
 const props = defineProps<{
   cards: RoomCard[]
   booking?: BookingContext
 }>()
-
-const chatStore = useChatStore()
 
 /** 主推 = 第一张（后端筛选顺序保证第一个是主推）。 */
 const recommendedId = computed(() => props.cards[0]?.roomId ?? '')
@@ -57,7 +55,7 @@ async function runQuote(room: RoomCard) {
         checkOut: props.booking.checkOut,
         guests: props.booking.guests,
       },
-      chatStore.sessionId,
+      getOrCreateUserId(),
     )
     if (resp.success && resp.data && 'total' in resp.data) {
       quoteMap.value[room.roomId] = { loading: false, data: resp.data, error: null }

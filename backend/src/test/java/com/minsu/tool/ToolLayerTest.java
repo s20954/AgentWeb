@@ -35,11 +35,11 @@ class ToolLayerTest {
     // ---------------------------------------------------------------- Schema
 
     @Test
-    void registryHasAllSixTools() {
+    void registryHasAllSevenTools() {
         List<String> names = dispatcher.registry().all().stream().map(t -> t.name()).toList();
-        assertEquals(6, names.size(), "应恰好 6 个工具");
+        assertEquals(7, names.size(), "应恰好 7 个工具");
         assertTrue(names.containsAll(List.of(
-                "search_rooms", "quote_price", "create_order", "get_order", "cancel_order", "ask_house_info")));
+                "search_rooms", "quote_price", "create_order", "get_order", "cancel_order", "pay_order", "ask_house_info")));
     }
 
     @Test
@@ -58,6 +58,7 @@ class ToolLayerTest {
     void writeToolsRequireConfirm() {
         assertTrue(dispatcher.registry().get("create_order").requiresConfirm());
         assertTrue(dispatcher.registry().get("cancel_order").requiresConfirm());
+        assertTrue(dispatcher.registry().get("pay_order").requiresConfirm());
         assertFalse(dispatcher.registry().get("search_rooms").requiresConfirm());
         assertFalse(dispatcher.registry().get("quote_price").requiresConfirm());
     }
@@ -106,6 +107,73 @@ class ToolLayerTest {
         ToolResult cancel = dispatcher.dispatch("u1", "cancel_order", Map.of("orderId", orderId));
         assertTrue(cancel.success());
         assertEquals("CANCELLED", cancel.data().get("status"));
+    }
+
+    // ---------------------------------------------------------------- 支付闭环（mock）
+
+    @Test
+    void payOrderFlow() {
+        // 下单 → 待支付
+        ToolResult create = dispatcher.dispatch("u1", "create_order", Map.of(
+                "roomId", "yg-001", "checkIn", "2026-11-01", "checkOut", "2026-11-03",
+                "guests", 2, "idempotencyKey", "idem-pay"));
+        assertTrue(create.success());
+        String orderId = (String) create.data().get("orderId");
+        assertEquals("PENDING_PAYMENT", create.data().get("status"));
+
+        // 支付 → 已确认
+        ToolResult pay = dispatcher.dispatch("u1", "pay_order", Map.of("orderId", orderId));
+        assertTrue(pay.success());
+        assertEquals("CONFIRMED", pay.data().get("status"));
+        assertEquals(true, pay.data().get("paid"));
+
+        // 查单 → 已确认
+        ToolResult get = dispatcher.dispatch("u1", "get_order", Map.of("orderId", orderId));
+        assertEquals("CONFIRMED", get.data().get("status"));
+    }
+
+    @Test
+    void payOrderIsIdempotent() {
+        ToolResult create = dispatcher.dispatch("u1", "create_order", Map.of(
+                "roomId", "yg-001", "checkIn", "2026-11-01", "checkOut", "2026-11-03",
+                "guests", 2, "idempotencyKey", "idem-pay-idem"));
+        String orderId = (String) create.data().get("orderId");
+
+        ToolResult p1 = dispatcher.dispatch("u1", "pay_order", Map.of("orderId", orderId));
+        ToolResult p2 = dispatcher.dispatch("u1", "pay_order", Map.of("orderId", orderId));
+
+        assertTrue(p1.success());
+        assertTrue(p2.success(), "重复支付已确认订单应幂等成功");
+        assertEquals("CONFIRMED", p2.data().get("status"));
+    }
+
+    @Test
+    void payCancelledOrderIsRejected() {
+        ToolResult create = dispatcher.dispatch("u1", "create_order", Map.of(
+                "roomId", "yg-001", "checkIn", "2026-11-01", "checkOut", "2026-11-03",
+                "guests", 2, "idempotencyKey", "idem-pay-cancel"));
+        String orderId = (String) create.data().get("orderId");
+
+        // 先取消
+        dispatcher.dispatch("u1", "cancel_order", Map.of("orderId", orderId));
+
+        // 再支付 → 拒绝
+        ToolResult pay = dispatcher.dispatch("u1", "pay_order", Map.of("orderId", orderId));
+        assertFalse(pay.success(), "已取消订单不可支付");
+        assertEquals("BUSINESS_REJECT", pay.data().get("errorType"));
+    }
+
+    @Test
+    void payOrderRequiresOwnership() {
+        ToolResult create = dispatcher.dispatch("user-A", "create_order", Map.of(
+                "roomId", "yg-001", "checkIn", "2026-11-01", "checkOut", "2026-11-03",
+                "guests", 2, "idempotencyKey", "idem-pay-own"));
+        String orderId = (String) create.data().get("orderId");
+
+        // 他人支付 → 无权
+        ToolResult pay = dispatcher.dispatch("user-B", "pay_order", Map.of("orderId", orderId));
+        assertFalse(pay.success(), "非本人订单不可支付");
+        assertEquals("BUSINESS_REJECT", pay.data().get("errorType"));
     }
 
     // ---------------------------------------------------------------- 幂等

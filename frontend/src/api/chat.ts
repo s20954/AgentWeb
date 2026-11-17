@@ -11,7 +11,8 @@ import type { StepEvent } from '@/types/chat'
  */
 const USER_ID_KEY = 'minsu-user-id'
 
-function getOrCreateUserId(): string {
+/** 获取（或首次创建）持久化 userId —— 供工具调用（报价/支付）共用同一订单归属用户。 */
+export function getOrCreateUserId(): string {
   let id = localStorage.getItem(USER_ID_KEY)
   if (!id) {
     id = 'web-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36)

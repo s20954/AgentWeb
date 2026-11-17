@@ -58,4 +58,21 @@ public class OrderStore {
                     o.guests(), o.totalAmount(), Status.CANCELLED);
         });
     }
+
+    /**
+     * 支付订单（原子）：仅 PENDING_PAYMENT → CONFIRMED；已确认幂等返回，已取消不可支付。
+     * 返回 null 表示订单不存在（由调用方按「订单不存在」处理）。
+     */
+    public Order pay(String orderId) {
+        return ordersById.computeIfPresent(orderId, (id, o) -> {
+            if (o.status() == Status.CONFIRMED) {
+                return o; // 已确认，幂等返回
+            }
+            if (o.status() == Status.CANCELLED) {
+                return o; // 已取消不可支付，原样返回（由调用方判断状态并报错）
+            }
+            return new Order(o.orderId(), o.userId(), o.roomId(), o.checkIn(), o.checkOut(),
+                    o.guests(), o.totalAmount(), Status.CONFIRMED);
+        });
+    }
 }

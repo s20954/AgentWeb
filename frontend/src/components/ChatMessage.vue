@@ -4,6 +4,7 @@ import { marked, Renderer, type Tokens } from 'marked'
 import type { ChatMessage } from '@/types/chat'
 import ThinkingChain from './ThinkingChain.vue'
 import RoomCards from './RoomCards.vue'
+import OrderPayCard from './OrderPayCard.vue'
 
 const props = defineProps<{
   message: ChatMessage
@@ -79,6 +80,9 @@ const rendered = computed(() => {
             class="inline-block w-2 h-4 ml-0.5 align-text-bottom bg-stone-400 animate-pulse"
           ></span>
         </div>
+
+        <!-- 订单支付卡片：下单后（文本含订单号 + 待支付）渲染「去支付」按钮，点击完成 mock 支付闭环 -->
+        <OrderPayCard v-if="message.content" :content="message.content" />
 
         <!-- 流式加载态（还没文本时的骨架） -->
         <div

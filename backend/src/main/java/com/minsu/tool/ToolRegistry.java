@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
  *   <li>{@code create_order} 写入 —— 有 roomId + 已确认价 + 明确要订</li>
  *   <li>{@code get_order} 只读 —— 查已有订单</li>
  *   <li>{@code cancel_order} 写入 —— 取消已有订单</li>
+ *   <li>{@code pay_order} 写入 —— 支付订单（待支付 → 已确认）</li>
  *   <li>{@code ask_house_info} 只读(RAG) —— 自然语言问房源/政策</li>
  * </ul>
  */
@@ -33,6 +34,7 @@ public class ToolRegistry {
         registerCreateOrder();
         registerGetOrder();
         registerCancelOrder();
+        registerPayOrder();
         registerAskHouseInfo();
     }
 
@@ -146,6 +148,23 @@ public class ToolRegistry {
                 "前置条件：已有 orderId，且订单可取消（未入住）。",
                 params,
                 "返回取消结果与是否产生取消费用；写入操作需用户二次确认。",
+                true
+        ));
+    }
+
+    private void registerPayOrder() {
+        Map<String, Object> props = new LinkedHashMap<>();
+        props.put("orderId", strProp("订单号（必填）"));
+
+        Map<String, Object> params = schema(props, List.of("orderId"));
+
+        tools.put("pay_order", new ToolDefinition(
+                "pay_order",
+                "对一个「待支付」订单执行支付，使其转为「已确认」（写入操作）。当用户明确表达支付/付款意图——例如说「支付/付款/付钱/去支付/我要付款」时，必须用本工具。",
+                "边界：当用户要「付款/支付」时用本工具 pay_order；当用户只是「查订单状态」时用 get_order；当用户要「取消订单」时用 cancel_order。区别是「付、查、退」三种不同意图。",
+                "前置条件：已有 orderId，且订单状态为「待支付」（已取消或已确认的订单不可支付）。",
+                params,
+                "返回支付结果与订单最新状态（已确认）；写入操作需用户二次确认。",
                 true
         ));
     }

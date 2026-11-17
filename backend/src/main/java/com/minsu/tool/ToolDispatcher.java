@@ -11,6 +11,7 @@ import com.minsu.tool.executor.CancelOrderExecutor;
 import com.minsu.tool.executor.CreateOrderExecutor;
 import com.minsu.tool.executor.GetOrderExecutor;
 import com.minsu.tool.executor.OrderStore;
+import com.minsu.tool.executor.PayOrderExecutor;
 import com.minsu.tool.executor.QuotePriceExecutor;
 import com.minsu.tool.executor.RoomStore;
 import com.minsu.tool.executor.SearchRoomsExecutor;
@@ -40,6 +41,7 @@ public class ToolDispatcher {
                 "create_order", new CreateOrderExecutor(roomStore, orderStore),
                 "get_order", new GetOrderExecutor(orderStore),
                 "cancel_order", new CancelOrderExecutor(orderStore),
+                "pay_order", new PayOrderExecutor(orderStore),
                 "ask_house_info", new AskHouseInfoExecutor(ragService, roomStore)
         );
     }

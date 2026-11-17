@@ -629,6 +629,12 @@ public class AgentService {
                 return true;
             }
         }
+        // 支付类：明确付款意图 → 走 pay_order 工具（待支付 → 已确认）
+        for (String kw : List.of("支付", "付款", "付钱", "去支付", "买单", "结账")) {
+            if (input.contains(kw)) {
+                return true;
+            }
+        }
         return false;
     }
 
